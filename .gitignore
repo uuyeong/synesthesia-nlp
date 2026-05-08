@@ -21,3 +21,6 @@ data/poetry_word2vec.model.wv.vectors.npy
 # Model weights (large)
 *.pt
 *.bin
+
+# Precomputed candidate word vectors (generated locally by B)
+data/candidate_vectors.npy
