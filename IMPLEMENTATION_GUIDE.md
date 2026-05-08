@@ -15,7 +15,8 @@
 ```
 1단계 ── A 단독 ──────────────────────────────────────────────────
          BERT 로드 + get_bert_vector() + load_anchors()
-         ※ B와 C 모두 이 함수에 의존 → 가장 먼저 완성
+         ※ B가 이 함수에 의존 → B의 본격 구현 전에 완성 필요
+         ※ C는 1단계 완료 전에도 더미 데이터로 UI 구축 시작 가능
 
 2단계 ── A · B · C 병렬 진행 ────────────────────────────────────
          A: MLP 학습 + rgb_syn/uni/blend + run_forward()
@@ -101,7 +102,7 @@ def get_bert_vector(word, tokenizer, model, mean_vec):
 - [ ] `load_bert()` 실행 시 오류 없음
 - [ ] `get_bert_vector("fire", ...)` 실행 시 shape `(768,)` 반환 확인
 - [ ] `load_anchors()` 실행 시 4개 npy 정상 로드 확인
-- [ ] 완료 후 팀 단톡에 공유 → B, C 병렬 시작 신호
+- [ ] 완료 후 팀 단톡에 공유 → B 본격 구현 시작 신호 (C는 이미 병렬 진행 중)
 
 ---
 

@@ -13,6 +13,7 @@ forward_pipeline.py — 정방향 파이프라인 (텍스트 → RGB)
 """
 
 import numpy as np
+import torch
 from pathlib import Path
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -27,10 +28,10 @@ def load_bert():
         tokenizer: BertTokenizer
         model: BertModel (eval 모드)
     """
-    # TODO: transformers에서 BertTokenizer, BertModel 로드
-    # tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-    # model = BertModel.from_pretrained("bert-base-uncased").eval()
-    raise NotImplementedError
+    from transformers import BertTokenizer, BertModel
+    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+    model = BertModel.from_pretrained("bert-base-uncased").eval()
+    return tokenizer, model
 
 
 def load_anchors():
@@ -42,8 +43,11 @@ def load_anchors():
         A_G (np.ndarray): shape (768,)
         A_B (np.ndarray): shape (768,)
     """
-    # TODO: DATA_DIR에서 .npy 파일 4개 로드
-    raise NotImplementedError
+    mean_vec = np.load(DATA_DIR / "bert_mean_vec.npy")
+    A_R      = np.load(DATA_DIR / "bert_anchor_R.npy")
+    A_G      = np.load(DATA_DIR / "bert_anchor_G.npy")
+    A_B      = np.load(DATA_DIR / "bert_anchor_B.npy")
+    return mean_vec, A_R, A_G, A_B
 
 
 def load_mlp(weights_path: str):
@@ -75,12 +79,13 @@ def get_bert_vector(word: str, tokenizer, model, mean_vec: np.ndarray) -> np.nda
     Returns:
         np.ndarray: Mean Centering 적용된 벡터 (768,)
     """
-    # TODO:
-    # 1. tokenizer(word, return_tensors='pt')
-    # 2. model(**inputs).last_hidden_state[0, 1:-1, :]  → 서브워드 토큰들
-    # 3. 서브워드가 여러 개이면 평균 풀링
-    # 4. - mean_vec 적용
-    raise NotImplementedError
+    inputs = tokenizer(word, return_tensors="pt")
+    with torch.no_grad():
+        out = model(**inputs)
+    # [CLS](인덱스 0)와 [SEP](인덱스 -1) 제외, 서브워드 토큰만 추출
+    subword_vecs = out.last_hidden_state[0, 1:-1, :].detach().numpy()
+    vec = subword_vecs.mean(axis=0)  # 서브워드 여러 개 → 평균 풀링
+    return vec - mean_vec
 
 
 def tokenize_text(text: str, tokenizer) -> list[str]:
@@ -189,3 +194,59 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0) -> list[dict]:
     # 3. 각 단어에 대해 get_bert_vector() → rgb_syn() + rgb_uni() → blend()
     # 4. 결과 dict 리스트 반환
     raise NotImplementedError
+
+
+# ─── 1단계 검증 (python src/forward_pipeline.py 로 실행) ─────────────────────
+
+if __name__ == "__main__":
+    print("=" * 50)
+    print("1단계 검증: load_bert / load_anchors / get_bert_vector")
+    print("=" * 50)
+
+    # 검증 1: load_anchors
+    print("\n[1] load_anchors() ...")
+    mean_vec, A_R, A_G, A_B = load_anchors()
+    assert mean_vec.shape == (768,), f"mean_vec shape 오류: {mean_vec.shape}"
+    assert A_R.shape == (768,),      f"A_R shape 오류: {A_R.shape}"
+    assert A_G.shape == (768,),      f"A_G shape 오류: {A_G.shape}"
+    assert A_B.shape == (768,),      f"A_B shape 오류: {A_B.shape}"
+    print("  ✓ mean_vec, A_R, A_G, A_B 모두 shape (768,) 확인")
+
+    # 검증 2: load_bert
+    print("\n[2] load_bert() ... (처음 실행 시 모델 다운로드로 수분 소요)")
+    tokenizer, model = load_bert()
+    print("  ✓ BertTokenizer, BertModel 로드 완료")
+
+    # 검증 3: get_bert_vector — 단일 토큰 단어
+    print("\n[3] get_bert_vector() 단일 토큰 단어 테스트 ...")
+    test_words = ["fire", "ocean", "forest", "night", "snow"]
+    for word in test_words:
+        vec = get_bert_vector(word, tokenizer, model, mean_vec)
+        assert vec.shape == (768,), f"{word} shape 오류: {vec.shape}"
+        print(f"  ✓ '{word}' → shape {vec.shape}, norm={np.linalg.norm(vec):.3f}")
+
+    # 검증 4: get_bert_vector — 서브워드 분리 단어
+    print("\n[4] get_bert_vector() 서브워드 분리 단어 테스트 ...")
+    subword_words = ["moonlight", "crimson", "synesthesia"]
+    for word in subword_words:
+        tokens = tokenizer.tokenize(word)
+        vec = get_bert_vector(word, tokenizer, model, mean_vec)
+        assert vec.shape == (768,), f"{word} shape 오류: {vec.shape}"
+        print(f"  ✓ '{word}' → 서브워드 {tokens} → 평균 풀링 → shape {vec.shape}")
+
+    # 검증 5: 앵커 벡터와 코사인 유사도 확인
+    print("\n[5] 앵커 벡터 코사인 유사도 확인 ...")
+    def cosine(a, b):
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+    v_fire  = get_bert_vector("fire",  tokenizer, model, mean_vec)
+    v_ocean = get_bert_vector("ocean", tokenizer, model, mean_vec)
+    v_forest = get_bert_vector("forest", tokenizer, model, mean_vec)
+
+    print(f"  fire  → cos(A_R)={cosine(v_fire, A_R):.3f}  cos(A_G)={cosine(v_fire, A_G):.3f}  cos(A_B)={cosine(v_fire, A_B):.3f}  (기대: R 최대)")
+    print(f"  ocean → cos(A_R)={cosine(v_ocean, A_R):.3f}  cos(A_G)={cosine(v_ocean, A_G):.3f}  cos(A_B)={cosine(v_ocean, A_B):.3f}  (기대: B 최대)")
+    print(f"  forest→ cos(A_R)={cosine(v_forest, A_R):.3f}  cos(A_G)={cosine(v_forest, A_G):.3f}  cos(A_B)={cosine(v_forest, A_B):.3f}  (기대: G 최대)")
+
+    print("\n" + "=" * 50)
+    print("✅ 1단계 검증 완료 — B, C에게 공유 가능")
+    print("=" * 50)
