@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Large / raw data files (download instructions in DATA_GUIDE.md)
+data/NRC-color-lexicon.txt
+data/Synesthesia/
+data/poetry_word2vec.model
+data/poetry_word2vec.model.wv.vectors.npy
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Model weights (large)
+*.pt
+*.bin
