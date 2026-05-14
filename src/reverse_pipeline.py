@@ -125,7 +125,14 @@ def find_nearest_word(v_i: np.ndarray, candidate_matrix: np.ndarray,
         sim_context = np.zeros_like(sim_color)
 
     score = alpha * sim_context + (1 - alpha) * sim_color
-    return candidate_words[np.argmax(score)]
+
+# argmax 대신 softmax 샘플링
+    temperature = 0.1  # 낮을수록 확실한 단어, 높을수록 다양
+    score_exp = np.exp((score - score.max()) / temperature)
+    prob = score_exp / score_exp.sum()
+    idx = np.random.choice(len(candidate_words), p=prob)
+    return candidate_words[idx]
+    
 
 
 # ─── 전체 파이프라인 ──────────────────────────────────────────────────────────
