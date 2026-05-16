@@ -91,10 +91,7 @@ def pixel_to_vector(rgb: np.ndarray, A_R: np.ndarray,
 
 # ─── 단어 검색 ────────────────────────────────────────────────────────────────
 
-def find_nearest_word(v_i: np.ndarray, candidate_matrix: np.ndarray,
-                      candidate_words: list[str],
-                      v_context: np.ndarray | None = None,
-                      alpha: float = 0.0) -> str:
+def find_nearest_word(v_i, norm_mat, candidate_words, v_context=None, alpha=0.0):
     """역변환 벡터에 가장 가까운 후보 단어를 cosine similarity로 찾는다.
 
     score(word) = α * cos(v_word, v_context) + (1-α) * cos(v_word, v_i)
@@ -114,8 +111,7 @@ def find_nearest_word(v_i: np.ndarray, candidate_matrix: np.ndarray,
     # 2. alpha > 0이면 cosine_similarity(candidate_matrix, v_context)도 계산
     # 3. score = alpha * sim_context + (1-alpha) * sim_color
     # 4. softmax 샘플링 또는 argmax
-    norm_mat = candidate_matrix / np.linalg.norm(candidate_matrix, axis=1, keepdims=True)
-    norm_vi = v_i / np.linalg.norm(v_i)
+    norm_vi = v_i / (np.linalg.norm(v_i) + 1e-8)
     sim_color = norm_mat @ norm_vi
 
     if alpha > 0 and v_context is not None:
