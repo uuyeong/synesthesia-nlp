@@ -13,7 +13,8 @@ reverse_pipeline.py — 역방향 파이프라인 (이미지 → 구조적 시)
 
 import numpy as np
 from pathlib import Path
-
+from forward_pipeline import load_bert, load_anchors, get_bert_vector
+from PIL import Image
 DATA_DIR = Path(__file__).parent.parent / "data"
 
 
@@ -25,8 +26,8 @@ def load_candidate_words() -> list[str]:
     Returns:
         list[str]: 9,942개 시적 단어 리스트
     """
-    # TODO: DATA_DIR / "poetry_candidate_words.txt" 읽기
-    raise NotImplementedError
+    path = DATA_DIR / "poetry_candidate_words.txt"
+    return path.read_text(encoding="utf-8").splitlines()
 
 
 def load_candidate_vectors(candidate_words: list[str], tokenizer, model,
@@ -41,10 +42,13 @@ def load_candidate_vectors(candidate_words: list[str], tokenizer, model,
     Returns:
         np.ndarray: shape (N, 768) — 후보 단어별 벡터 행렬
     """
-    # TODO:
-    # 캐시 파일(candidate_vectors.npy)이 있으면 로드,
-    # 없으면 forward_pipeline.get_bert_vector()로 일괄 계산 후 저장
-    raise NotImplementedError
+    cache = DATA_DIR / "candidate_vectors.npy"
+    if cache.exists():
+        return np.load(cache)
+    vecs = np.array([get_bert_vector(w, tokenizer, model, mean_vec) for w in candidate_words])
+    np.save(cache, vecs)
+    return vecs
+    
 
 
 # ─── 이미지 처리 ──────────────────────────────────────────────────────────────
@@ -60,7 +64,9 @@ def downsample_image(image_path: str, resolution: tuple[int, int]) -> np.ndarray
         np.ndarray: shape (H, W, 3), dtype uint8, 범위 0~255
     """
     # TODO: PIL Image.open().resize(resolution, LANCZOS).convert("RGB")
-    raise NotImplementedError
+    H, W = resolution
+    img = Image.open(image_path).resize((W, H), Image.LANCZOS).convert("RGB")
+    return np.array(img)
 
 
 # ─── 역변환 ──────────────────────────────────────────────────────────────────
@@ -79,15 +85,13 @@ def pixel_to_vector(rgb: np.ndarray, A_R: np.ndarray,
         np.ndarray: 역변환된 벡터 (768,)
     """
     # TODO: 수식 그대로 구현
-    raise NotImplementedError
+    R, G, B = rgb[0]/255, rgb[1]/255, rgb[2]/255
+    return R*A_R + G*A_G + B*A_B
 
 
 # ─── 단어 검색 ────────────────────────────────────────────────────────────────
 
-def find_nearest_word(v_i: np.ndarray, candidate_matrix: np.ndarray,
-                      candidate_words: list[str],
-                      v_context: np.ndarray | None = None,
-                      alpha: float = 0.0) -> str:
+def find_nearest_word(v_i, norm_mat, candidate_words, v_context=None, alpha=0.0):
     """역변환 벡터에 가장 가까운 후보 단어를 cosine similarity로 찾는다.
 
     score(word) = α * cos(v_word, v_context) + (1-α) * cos(v_word, v_i)
@@ -107,7 +111,24 @@ def find_nearest_word(v_i: np.ndarray, candidate_matrix: np.ndarray,
     # 2. alpha > 0이면 cosine_similarity(candidate_matrix, v_context)도 계산
     # 3. score = alpha * sim_context + (1-alpha) * sim_color
     # 4. softmax 샘플링 또는 argmax
-    raise NotImplementedError
+    norm_vi = v_i / (np.linalg.norm(v_i) + 1e-8)
+    sim_color = norm_mat @ norm_vi
+
+    if alpha > 0 and v_context is not None:
+        norm_vc = v_context / np.linalg.norm(v_context)
+        sim_context = norm_mat @ norm_vc
+    else:
+        sim_context = np.zeros_like(sim_color)
+
+    score = alpha * sim_context + (1 - alpha) * sim_color
+
+# argmax 대신 softmax 샘플링
+    temperature = 0.5  # 낮을수록 확실한 단어, 높을수록 다양
+    score_exp = np.exp((score - score.max()) / temperature)
+    prob = score_exp / score_exp.sum()
+    idx = np.random.choice(len(candidate_words), p=prob)
+    return candidate_words[idx]
+    
 
 
 # ─── 전체 파이프라인 ──────────────────────────────────────────────────────────
@@ -133,4 +154,23 @@ def run_reverse(image_path: str, resolution: tuple[int, int] = (8, 8),
     # 4. 키워드가 있으면 get_bert_vector(keyword)로 v_context 계산
     # 5. find_nearest_word()로 단어 선택
     # 6. H × W 행렬 형태로 반환
-    raise NotImplementedError
+    tokenizer, model = load_bert()
+    mean_vec, A_R, A_G, A_B = load_anchors()
+    candidate_words = load_candidate_words()
+    candidate_matrix = load_candidate_vectors(candidate_words, tokenizer, model, mean_vec)
+
+    pixels = downsample_image(image_path, resolution)
+    H, W = resolution
+
+    v_context = get_bert_vector(keyword, tokenizer, model, mean_vec) if keyword else None
+    eff_alpha = alpha if keyword else 0.0
+
+    result = []
+    for h in range(H):
+        row = []
+        for w in range(W):
+            v_i = pixel_to_vector(pixels[h, w], A_R, A_G, A_B)
+            word = find_nearest_word(v_i, candidate_matrix, candidate_words, v_context, eff_alpha)
+            row.append(word)
+        result.append(row)
+    return result
