@@ -123,7 +123,7 @@ def find_nearest_word(v_i, norm_mat, candidate_words, v_context=None, alpha=0.0)
     score = alpha * sim_context + (1 - alpha) * sim_color
 
 # argmax 대신 softmax 샘플링
-    temperature = 0.1  # 낮을수록 확실한 단어, 높을수록 다양
+    temperature = 0.5  # 낮을수록 확실한 단어, 높을수록 다양
     score_exp = np.exp((score - score.max()) / temperature)
     prob = score_exp / score_exp.sum()
     idx = np.random.choice(len(candidate_words), p=prob)
