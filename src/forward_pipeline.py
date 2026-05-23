@@ -13,11 +13,13 @@ forward_pipeline.py — 정방향 파이프라인 (텍스트 → RGB)
 """
 
 import re
+from functools import cache
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from pathlib import Path
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
@@ -43,8 +45,9 @@ class SynesthesiaMLP(nn.Module):
 
 # ─── 모델 로드 ────────────────────────────────────────────────────────────────
 
+@cache
 def load_bert():
-    """BERT 토크나이저와 모델을 로드한다.
+    """BERT 토크나이저와 모델을 로드한다 (프로세스당 1회만 실제 로드, 이후 캐시 반환).
 
     Returns:
         tokenizer: BertTokenizer
@@ -56,8 +59,9 @@ def load_bert():
     return tokenizer, model
 
 
+@cache
 def load_anchors():
-    """저장된 BERT Mean Centering 벡터와 RGB 앵커 벡터를 로드한다.
+    """저장된 BERT Mean Centering 벡터와 RGB 앵커 벡터를 로드한다 (캐시).
 
     Returns:
         mean_vec (np.ndarray): shape (768,)
@@ -72,8 +76,9 @@ def load_anchors():
     return mean_vec, A_R, A_G, A_B
 
 
+@cache
 def load_mlp(weights_path=None) -> SynesthesiaMLP:
-    """학습된 MLP 가중치를 로드한다.
+    """학습된 MLP 가중치를 로드한다 (캐시).
 
     Args:
         weights_path: mlp_weights.pt 경로 (None이면 data/ 디렉터리 기본값 사용)
@@ -84,13 +89,14 @@ def load_mlp(weights_path=None) -> SynesthesiaMLP:
     if weights_path is None:
         weights_path = DATA_DIR / "mlp_weights.pt"
     mlp = SynesthesiaMLP()
-    mlp.load_state_dict(torch.load(weights_path, map_location="cpu"))
+    mlp.load_state_dict(torch.load(weights_path, map_location="cpu", weights_only=True))
     mlp.eval()
     return mlp
 
 
+@cache
 def load_eagleman() -> dict:
-    """synesthesia_grapheme_mean_rgb.csv에서 알파벳 → RGB 딕셔너리를 생성한다.
+    """synesthesia_grapheme_mean_rgb.csv에서 알파벳 → RGB 딕셔너리를 생성한다 (캐시).
 
     Returns:
         dict: {대문자 알파벳 → np.ndarray (3,)} 형태
@@ -119,12 +125,20 @@ def get_bert_vector(word: str, tokenizer, model, mean_vec: np.ndarray) -> np.nda
 
     Returns:
         np.ndarray: Mean Centering 적용된 벡터 (768,)
+
+    Raises:
+        ValueError: word가 빈 문자열이거나 [CLS]/[SEP] 외 서브워드가 잡히지 않을 때.
+                    (이 경우 평균 풀링 결과가 NaN이 되므로 caller가 인지하도록 막는다.)
     """
+    if not word:
+        raise ValueError("get_bert_vector: empty word")
     inputs = tokenizer(word, return_tensors="pt")
     with torch.no_grad():
         out = model(**inputs)
     # [CLS](인덱스 0)와 [SEP](인덱스 -1) 제외, 서브워드 토큰만 추출
     subword_vecs = out.last_hidden_state[0, 1:-1, :].detach().numpy()
+    if subword_vecs.shape[0] == 0:
+        raise ValueError(f"get_bert_vector: no subword tokens for '{word}'")
     vec = subword_vecs.mean(axis=0)  # 서브워드 여러 개 → 평균 풀링
     return vec - mean_vec
 
@@ -240,6 +254,7 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0) -> list[dict]:
         list[dict]: 단어별 결과
             [{"word": str, "rgb_syn": [R,G,B], "rgb_uni": [R,G,B], "rgb_out": [R,G,B]}, ...]
     """
+    # load_* 함수들은 @cache 데코레이터로 1회만 실제 로드 → 매 호출 BERT 재로딩 비용 없음.
     tokenizer, bert_model = load_bert()
     mean_vec, A_R, A_G, A_B = load_anchors()
     eagleman = load_eagleman()
@@ -262,11 +277,12 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0) -> list[dict]:
         r_grapheme = get_grapheme_color(word, eagleman)
         r_out = blend(r_syn, r_uni, r_grapheme, beta, gamma)
 
+        # np.rint: truncation 대신 반올림 (0~255 변환 시 시스템적 -0.5 편향 제거)
         results.append({
             "word":    word,
-            "rgb_syn": r_syn.astype(int).tolist(),
-            "rgb_uni": r_uni.astype(int).tolist(),
-            "rgb_out": r_out.astype(int).tolist(),
+            "rgb_syn": np.rint(r_syn).astype(int).tolist(),
+            "rgb_uni": np.rint(r_uni).astype(int).tolist(),
+            "rgb_out": np.rint(r_out).astype(int).tolist(),
         })
 
     return results
