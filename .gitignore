@@ -24,3 +24,6 @@ data/poetry_word2vec.model.wv.vectors.npy
 
 # Precomputed candidate word vectors (generated locally by B)
 data/candidate_vectors.npy
+
+# Precomputed training vectors for MLP (generated locally by A)
+data/training_vectors.npy

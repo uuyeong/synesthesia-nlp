@@ -12,11 +12,33 @@ forward_pipeline.py — 정방향 파이프라인 (텍스트 → RGB)
     → RGB_out
 """
 
+import re
 import numpy as np
+import pandas as pd
 import torch
+import torch.nn as nn
 from pathlib import Path
 
 DATA_DIR = Path(__file__).parent.parent / "data"
+
+
+# ─── MLP 모델 정의 ────────────────────────────────────────────────────────────
+
+class SynesthesiaMLP(nn.Module):
+    """768차원 BERT 벡터 → 3차원 RGB 매핑 MLP."""
+
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(768, 32),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(32, 3),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x) * 255.0
 
 
 # ─── 모델 로드 ────────────────────────────────────────────────────────────────
@@ -50,17 +72,36 @@ def load_anchors():
     return mean_vec, A_R, A_G, A_B
 
 
-def load_mlp(weights_path: str):
+def load_mlp(weights_path=None) -> SynesthesiaMLP:
     """학습된 MLP 가중치를 로드한다.
 
     Args:
-        weights_path: mlp_weights.pt 경로
+        weights_path: mlp_weights.pt 경로 (None이면 data/ 디렉터리 기본값 사용)
 
     Returns:
-        model: MLP (eval 모드)
+        SynesthesiaMLP (eval 모드)
     """
-    # TODO: MLP 클래스 정의 후 torch.load로 로드
-    raise NotImplementedError
+    if weights_path is None:
+        weights_path = DATA_DIR / "mlp_weights.pt"
+    mlp = SynesthesiaMLP()
+    mlp.load_state_dict(torch.load(weights_path, map_location="cpu"))
+    mlp.eval()
+    return mlp
+
+
+def load_eagleman() -> dict:
+    """synesthesia_grapheme_mean_rgb.csv에서 알파벳 → RGB 딕셔너리를 생성한다.
+
+    Returns:
+        dict: {대문자 알파벳 → np.ndarray (3,)} 형태
+    """
+    df = pd.read_csv(DATA_DIR / "synesthesia_grapheme_mean_rgb.csv")
+    eagleman = {}
+    for _, row in df.iterrows():
+        letter = str(row["grapheme"]).upper()
+        rgb = np.array([row["R_0_255"], row["G_0_255"], row["B_0_255"]], dtype=np.float32)
+        eagleman[letter] = rgb
+    return eagleman
 
 
 # ─── 임베딩 ──────────────────────────────────────────────────────────────────
@@ -88,40 +129,42 @@ def get_bert_vector(word: str, tokenizer, model, mean_vec: np.ndarray) -> np.nda
     return vec - mean_vec
 
 
-def tokenize_text(text: str, tokenizer) -> list[str]:
-    """텍스트를 단어 단위로 분리한다 (단어 경계 기준, 구두점 분리 포함).
+def tokenize_text(text: str, tokenizer=None) -> list[str]:
+    """텍스트를 알파벳 단어 단위로 분리한다 (구두점·숫자 제외).
 
     Args:
         text: 입력 텍스트
+        tokenizer: 사용하지 않음 (인터페이스 일관성을 위해 유지)
 
     Returns:
-        list[str]: 단어 리스트
+        list[str]: 소문자 단어 리스트
     """
-    # TODO: 단순 split 또는 nltk word_tokenize 사용
-    raise NotImplementedError
+    words = re.findall(r"[a-zA-Z]+", text)
+    return [w.lower() for w in words]
 
 
 # ─── 색상 계산 ────────────────────────────────────────────────────────────────
 
-def rgb_syn(v_i: np.ndarray, mlp) -> np.ndarray:
+def rgb_syn(v_i: np.ndarray, mlp: SynesthesiaMLP) -> np.ndarray:
     """방법 1: MLP (768→32→3)로 RGB_syn을 계산한다.
 
     Args:
         v_i: Mean Centering 적용된 BERT 벡터 (768,)
-        mlp: 학습된 MLP 모델
+        mlp: 학습된 SynesthesiaMLP 모델
 
     Returns:
         np.ndarray: RGB 값 (3,), 범위 0~255
     """
-    # TODO: torch.no_grad()로 MLP forward pass
-    raise NotImplementedError
+    with torch.no_grad():
+        t = torch.tensor(v_i, dtype=torch.float32).unsqueeze(0)
+        out = mlp(t).squeeze(0).numpy()
+    return out.astype(np.float32)
 
 
 def rgb_uni(v_i: np.ndarray, A_R: np.ndarray, A_G: np.ndarray, A_B: np.ndarray) -> np.ndarray:
     """방법 2: Cosine Similarity 기반 RGB_uni를 계산한다.
 
-    cos(v_i, A_R), cos(v_i, A_G), cos(v_i, A_B)를 계산하고
-    0~255 범위로 정규화한다.
+    cos(v_i, A_R/G/B) ∈ [-1, 1] → (cos+1)/2 ∈ [0,1] → ×255
 
     Args:
         v_i: Mean Centering 적용된 BERT 벡터 (768,)
@@ -130,30 +173,38 @@ def rgb_uni(v_i: np.ndarray, A_R: np.ndarray, A_G: np.ndarray, A_B: np.ndarray) 
     Returns:
         np.ndarray: RGB 값 (3,), 범위 0~255
     """
-    # TODO:
-    # 1. cos_r, cos_g, cos_b = cosine_similarity(v_i, A_R/G/B)
-    # 2. shift to [0, 1] then scale to [0, 255]
-    raise NotImplementedError
+    norm_i = np.linalg.norm(v_i) + 1e-8
+
+    def cosine(anchor):
+        return np.dot(v_i, anchor) / (norm_i * (np.linalg.norm(anchor) + 1e-8))
+
+    cos_r = cosine(A_R)
+    cos_g = cosine(A_G)
+    cos_b = cosine(A_B)
+
+    rgb = np.array([(cos_r + 1) / 2,
+                    (cos_g + 1) / 2,
+                    (cos_b + 1) / 2], dtype=np.float32) * 255.0
+    return rgb
 
 
 def get_grapheme_color(word: str, eagleman: dict) -> np.ndarray:
     """단어의 첫 글자를 Eagleman 데이터에서 조회하여 RGB_grapheme을 반환한다.
 
-    근거: 공감각 연구에서 단어 색상은 첫 글자 색상이 지배적
-    (Rich et al., 2005; Simner et al., 2006)
-
     Args:
         word: 입력 단어
-        eagleman: {알파벳 → RGB np.ndarray} 딕셔너리
+        eagleman: {대문자 알파벳 → RGB np.ndarray} 딕셔너리
 
     Returns:
         np.ndarray: RGB 값 (3,), 범위 0~255. 알파벳 이외 문자는 (128,128,128) 반환.
     """
-    # TODO: word[0].upper()로 첫 글자 추출 후 eagleman dict 조회
-    raise NotImplementedError
+    if not word or not word[0].isalpha():
+        return np.array([128.0, 128.0, 128.0], dtype=np.float32)
+    key = word[0].upper()
+    return eagleman.get(key, np.array([128.0, 128.0, 128.0], dtype=np.float32)).copy()
 
 
-def blend(rgb_syn: np.ndarray, rgb_uni: np.ndarray,
+def blend(rgb_syn_val: np.ndarray, rgb_uni_val: np.ndarray,
           rgb_grapheme: np.ndarray, beta: float, gamma: float) -> np.ndarray:
     """β 혼합과 γ 알파벳 노이즈를 적용하여 최종 RGB_out을 계산한다.
 
@@ -161,8 +212,8 @@ def blend(rgb_syn: np.ndarray, rgb_uni: np.ndarray,
     RGB_out   = RGB_final + γ * (RGB_grapheme - RGB_final)
 
     Args:
-        rgb_syn: MLP 출력 (3,)
-        rgb_uni: Cosine Similarity 출력 (3,)
+        rgb_syn_val: MLP 출력 (3,)
+        rgb_uni_val: Cosine Similarity 출력 (3,)
         rgb_grapheme: Eagleman 첫 글자 색상 (3,)
         beta: 공감각 비중 (0~1), 1이면 MLP만 사용
         gamma: 알파벳 노이즈 강도 (0~1)
@@ -170,8 +221,9 @@ def blend(rgb_syn: np.ndarray, rgb_uni: np.ndarray,
     Returns:
         np.ndarray: 최종 RGB 값 (3,), 범위 0~255
     """
-    # TODO: 수식 그대로 구현, np.clip(result, 0, 255)로 마무리
-    raise NotImplementedError
+    rgb_final = beta * rgb_syn_val + (1 - beta) * rgb_uni_val
+    rgb_out = rgb_final + gamma * (rgb_grapheme - rgb_final)
+    return np.clip(rgb_out, 0, 255).astype(np.float32)
 
 
 # ─── 전체 파이프라인 ──────────────────────────────────────────────────────────
@@ -188,22 +240,45 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0) -> list[dict]:
         list[dict]: 단어별 결과
             [{"word": str, "rgb_syn": [R,G,B], "rgb_uni": [R,G,B], "rgb_out": [R,G,B]}, ...]
     """
-    # TODO:
-    # 1. load_bert(), load_anchors(), load_mlp() 호출
-    # 2. tokenize_text()로 단어 분리
-    # 3. 각 단어에 대해 get_bert_vector() → rgb_syn() + rgb_uni() → blend()
-    # 4. 결과 dict 리스트 반환
-    raise NotImplementedError
+    tokenizer, bert_model = load_bert()
+    mean_vec, A_R, A_G, A_B = load_anchors()
+    eagleman = load_eagleman()
+
+    mlp_path = DATA_DIR / "mlp_weights.pt"
+    if mlp_path.exists():
+        mlp = load_mlp(mlp_path)
+    else:
+        print("[경고] mlp_weights.pt 없음 — rgb_syn을 rgb_uni로 대체합니다.")
+        mlp = None
+
+    words = tokenize_text(text)
+    results = []
+
+    for word in words:
+        v_i = get_bert_vector(word, tokenizer, bert_model, mean_vec)
+
+        r_uni = rgb_uni(v_i, A_R, A_G, A_B)
+        r_syn = rgb_syn(v_i, mlp) if mlp is not None else r_uni.copy()
+        r_grapheme = get_grapheme_color(word, eagleman)
+        r_out = blend(r_syn, r_uni, r_grapheme, beta, gamma)
+
+        results.append({
+            "word":    word,
+            "rgb_syn": r_syn.astype(int).tolist(),
+            "rgb_uni": r_uni.astype(int).tolist(),
+            "rgb_out": r_out.astype(int).tolist(),
+        })
+
+    return results
 
 
-# ─── 1단계 검증 (python src/forward_pipeline.py 로 실행) ─────────────────────
+# ─── 검증 (python src/forward_pipeline.py 로 실행) ───────────────────────────
 
 if __name__ == "__main__":
-    print("=" * 50)
+    print("=" * 60)
     print("1단계 검증: load_bert / load_anchors / get_bert_vector")
-    print("=" * 50)
+    print("=" * 60)
 
-    # 검증 1: load_anchors
     print("\n[1] load_anchors() ...")
     mean_vec, A_R, A_G, A_B = load_anchors()
     assert mean_vec.shape == (768,), f"mean_vec shape 오류: {mean_vec.shape}"
@@ -212,12 +287,10 @@ if __name__ == "__main__":
     assert A_B.shape == (768,),      f"A_B shape 오류: {A_B.shape}"
     print("  ✓ mean_vec, A_R, A_G, A_B 모두 shape (768,) 확인")
 
-    # 검증 2: load_bert
     print("\n[2] load_bert() ... (처음 실행 시 모델 다운로드로 수분 소요)")
     tokenizer, model = load_bert()
     print("  ✓ BertTokenizer, BertModel 로드 완료")
 
-    # 검증 3: get_bert_vector — 단일 토큰 단어
     print("\n[3] get_bert_vector() 단일 토큰 단어 테스트 ...")
     test_words = ["fire", "ocean", "forest", "night", "snow"]
     for word in test_words:
@@ -225,7 +298,6 @@ if __name__ == "__main__":
         assert vec.shape == (768,), f"{word} shape 오류: {vec.shape}"
         print(f"  ✓ '{word}' → shape {vec.shape}, norm={np.linalg.norm(vec):.3f}")
 
-    # 검증 4: get_bert_vector — 서브워드 분리 단어
     print("\n[4] get_bert_vector() 서브워드 분리 단어 테스트 ...")
     subword_words = ["moonlight", "crimson", "synesthesia"]
     for word in subword_words:
@@ -234,19 +306,69 @@ if __name__ == "__main__":
         assert vec.shape == (768,), f"{word} shape 오류: {vec.shape}"
         print(f"  ✓ '{word}' → 서브워드 {tokens} → 평균 풀링 → shape {vec.shape}")
 
-    # 검증 5: 앵커 벡터와 코사인 유사도 확인
     print("\n[5] 앵커 벡터 코사인 유사도 확인 ...")
     def cosine(a, b):
         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-    v_fire  = get_bert_vector("fire",  tokenizer, model, mean_vec)
-    v_ocean = get_bert_vector("ocean", tokenizer, model, mean_vec)
+    v_fire   = get_bert_vector("fire",   tokenizer, model, mean_vec)
+    v_ocean  = get_bert_vector("ocean",  tokenizer, model, mean_vec)
     v_forest = get_bert_vector("forest", tokenizer, model, mean_vec)
 
     print(f"  fire  → cos(A_R)={cosine(v_fire, A_R):.3f}  cos(A_G)={cosine(v_fire, A_G):.3f}  cos(A_B)={cosine(v_fire, A_B):.3f}  (기대: R 최대)")
     print(f"  ocean → cos(A_R)={cosine(v_ocean, A_R):.3f}  cos(A_G)={cosine(v_ocean, A_G):.3f}  cos(A_B)={cosine(v_ocean, A_B):.3f}  (기대: B 최대)")
     print(f"  forest→ cos(A_R)={cosine(v_forest, A_R):.3f}  cos(A_G)={cosine(v_forest, A_G):.3f}  cos(A_B)={cosine(v_forest, A_B):.3f}  (기대: G 최대)")
 
-    print("\n" + "=" * 50)
-    print("✅ 1단계 검증 완료 — B, C에게 공유 가능")
-    print("=" * 50)
+    print("\n" + "=" * 60)
+    print("2단계 검증: rgb_uni / load_eagleman / get_grapheme_color / blend / tokenize_text")
+    print("=" * 60)
+
+    print("\n[6] rgb_uni() 테스트 ...")
+    for word, expected_ch in [("fire", "R"), ("ocean", "B"), ("forest", "G")]:
+        v = get_bert_vector(word, tokenizer, model, mean_vec)
+        c = rgb_uni(v, A_R, A_G, A_B)
+        assert c.shape == (3,), f"rgb_uni shape 오류: {c.shape}"
+        assert np.all((c >= 0) & (c <= 255)), f"rgb_uni 범위 오류: {c}"
+        print(f"  ✓ '{word}' → rgb_uni={c.astype(int).tolist()}  (기대: {expected_ch} 채널 최대)")
+
+    print("\n[7] load_eagleman() 테스트 ...")
+    eagleman = load_eagleman()
+    assert "A" in eagleman and eagleman["A"].shape == (3,)
+    assert len(eagleman) == 26
+    print(f"  ✓ Eagleman 딕셔너리 {len(eagleman)}개 로드 완료")
+    print(f"  ✓ A={eagleman['A'].astype(int).tolist()}, R={eagleman['R'].astype(int).tolist()}")
+
+    print("\n[8] get_grapheme_color() 테스트 ...")
+    gc = get_grapheme_color("night", eagleman)
+    assert gc.shape == (3,)
+    assert np.array_equal(gc, eagleman["N"]), "첫 글자 조회 오류"
+    gc_num = get_grapheme_color("123", eagleman)
+    assert np.array_equal(gc_num, [128, 128, 128]), "숫자 처리 오류"
+    print(f"  ✓ 'night' → get_grapheme_color={gc.astype(int).tolist()}  (첫 글자 N)")
+    print(f"  ✓ '123'   → {gc_num.astype(int).tolist()}  (알파벳 이외 → 회색)")
+
+    print("\n[9] blend() 테스트 ...")
+    r_syn_t = np.array([200.0, 50.0, 100.0])
+    r_uni_t = np.array([100.0, 150.0, 80.0])
+    r_gra_t = np.array([255.0, 0.0, 0.0])
+    r_out = blend(r_syn_t, r_uni_t, r_gra_t, beta=0.5, gamma=0.0)
+    expected = np.clip((r_syn_t + r_uni_t) / 2, 0, 255)
+    assert np.allclose(r_out, expected), f"blend 오류: {r_out} != {expected}"
+    print(f"  ✓ beta=0.5, gamma=0.0 → {r_out.astype(int).tolist()}")
+
+    print("\n[10] tokenize_text() 테스트 ...")
+    tokens = tokenize_text("The night was silent and cold.")
+    assert tokens == ["the", "night", "was", "silent", "and", "cold"]
+    print(f"  ✓ {tokens}")
+
+    print("\n[11] run_forward() 통합 테스트 ...")
+    results = run_forward("The night was silent and cold", beta=0.5, gamma=0.0)
+    assert len(results) == 6
+    for r in results:
+        assert set(r.keys()) == {"word", "rgb_syn", "rgb_uni", "rgb_out"}
+        assert len(r["rgb_out"]) == 3
+        assert all(0 <= v <= 255 for v in r["rgb_out"])
+        print(f"  ✓ '{r['word']}' → rgb_out={r['rgb_out']}")
+
+    print("\n" + "=" * 60)
+    print("✅ 2단계 검증 완료 — B, C에게 공유 가능")
+    print("=" * 60)
