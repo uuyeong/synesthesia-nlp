@@ -1,0 +1,145 @@
+"""
+app.py — Gradio 인터랙티브 웹 데모
+담당: 김민서 (C)
+
+탭 구성:
+    탭 1 — 정방향: 텍스트 → 색상 바 + 2D 이미지 + 3D 타워
+    탭 2 — 역방향: 이미지 → 구조적 시
+
+실행:
+    python src/app.py
+"""
+
+import gradio as gr
+import math
+from forward_pipeline import run_forward
+from reverse_pipeline import run_reverse
+from visualizer import make_color_bar, make_2d_image, make_3d_tower
+
+
+# ─── 탭 1: 정방향 ─────────────────────────────────────────────────────────────
+
+def forward_tab_handler(text: str, beta: float, gamma: float, ncols: int) -> tuple:
+    """Gradio 탭 1 이벤트 핸들러 — 텍스트를 시각화 결과로 변환한다."""
+    
+    # 1. 텍스트와 파라미터를 입력받아 각 토큰/알파벳의 색상 도출
+    word_colors = run_forward(text, beta, gamma)
+    
+    # 2. 3가지 방식의 시각화 결과물 생성
+    color_bar = make_color_bar(word_colors)
+    img_2d = make_2d_image(word_colors, ncols=ncols)
+    fig_3d = make_3d_tower(word_colors)
+    
+    # 3. Gradio UI로 반환
+    return color_bar, img_2d, fig_3d
+
+def update_ncols_max(text: str):
+    """입력된 텍스트 길이에 따라 ncols 슬라이더의 최대값을 16:9 비율 한계로 동적 조정한다."""
+    if not text or len(text) == 0:
+        return gr.update(maximum=32)  # 기본 텍스트가 없을 때의 최대값
+        
+    L = len(text)
+    # 16:9 비율을 유지하기 위한 최대 가로 픽셀 수 계산: C = (4/3) * sqrt(L)
+    max_c = int((4 / 3) * math.sqrt(L))
+    max_c = max(8, max_c)
+    
+    # 2. 정사각형(1:1) 비율이 되는 가로 길이 계산 (루트 L)
+    square_c = int(math.sqrt(L))
+    square_c = max(8, square_c) # 너무 좁아지지 않도록 최소 8픽셀 보장
+    
+    # 슬라이더의 최대값과 현재 조작바의 위치(value)를 동시에 업데이트
+    return gr.update(maximum=max_c, value=square_c)
+
+
+# ─── 탭 2: 역방향 ─────────────────────────────────────────────────────────────
+
+def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) -> str:
+    """Gradio 탭 2 이벤트 핸들러 — 이미지를 구조적 시로 변환한다."""
+    
+    # 1. resolution_str("8×8")을 (H, W) 튜플로 파싱
+    res_parts = resolution_str.split("×")
+    resolution = (int(res_parts[0]), int(res_parts[1]))
+    
+    # 2. keyword가 비어있으면 None 처리 및 alpha=0 강제
+    if not keyword or keyword.strip() == "":
+        keyword = None
+        alpha = 0.0
+        
+    # 3. 역방향 파이프라인 실행 (2차원 단어 리스트 반환 가정)
+    poem_grid = run_reverse(image, resolution, keyword, alpha)
+    
+    # 4. 2차원 행렬을 "단어 단어 단어\n단어 단어 단어\n..." 형태의 텍스트로 결합
+    lines = []
+    for row in poem_grid:
+        lines.append(" ".join(row))
+        
+    return "\n".join(lines)
+
+
+# ─── Gradio UI 구성 ───────────────────────────────────────────────────────────
+
+def build_ui():
+    # 다크 모드가 전시에 더 몰입감을 줄 수 있어 theme을 약간 어둡게 튜닝하는 것도 좋습니다.
+    with gr.Blocks(title="Synesthetic AI", theme=gr.themes.Soft()) as demo:
+        gr.Markdown("<h1 style='text-align: center;'>🧠 공감각 AI (Synesthetic AI)</h1>")
+        gr.Markdown("<p style='text-align: center;'>기계의 눈으로 읽고, 시의 언어로 그리는 공감각 예술</p>")
+        
+        # ─── 탭 1: 정방향 ───────────────────────────────────────────────────
+        with gr.Tab("정방향: 텍스트 → 시각화"):
+            with gr.Row():
+                # 좌측 (Scale=1): 깔끔한 입력 및 제어부
+                with gr.Column(scale=1):
+                    text_input = gr.Textbox(label="텍스트 입력 (시, 소설 등)", lines=8, placeholder="여기에 텍스트를 입력하세요...")
+                    
+                    # 관람객이 복잡해하지 않도록 파라미터는 접어둡니다.
+                    with gr.Accordion("⚙️ 세부 파라미터 조절 (클릭하여 펼치기)", open=False):
+                        beta_slider = gr.Slider(0.0, 1.0, value=0.5, label="β (인간공감각 ←→ AI세계관)")
+                        gamma_slider = gr.Slider(0.0, 1.0, value=0.0, label="γ (알파벳 노이즈 강도)")
+                        #ncols_slider = gr.Slider(8, 32, value=32, step=1, label="2D 이미지 가로 픽셀 수")
+                    
+                    # 버튼들을 나란히 배치
+                    with gr.Row():
+                        run_btn = gr.Button("🎨 시각화 생성", variant="primary")
+                        immersive_btn = gr.Button("🚀 3D 전체화면", variant="secondary")
+                        
+                # 우측 (Scale=2): 결과물 중심의 넓은 캔버스
+                with gr.Column(scale=2):
+                    color_bar_out = gr.Image(label="전체 색상 흐름 (Color Bar)", height=120) 
+                    
+                    # [수정된 부분] gr.Row()를 제거하여 위아래로 한 줄씩 큼직하게 배치합니다.
+                    img_2d_out = gr.Image(label="2D 픽셀 이미지")
+                    fig_3d_out = gr.Plot(label="3D 컬러 타워 (미리보기)")
+
+            # 이벤트 연결
+            #run_btn.click(forward_tab_handler, inputs=[text_input, beta_slider, gamma_slider, ncols_slider], outputs=[color_bar_out, img_2d_out, fig_3d_out])
+            run_btn.click(forward_tab_handler, inputs=[text_input, beta_slider, gamma_slider], outputs=[color_bar_out, img_2d_out, fig_3d_out])
+            immersive_btn.click(fn=None, inputs=None, outputs=None, js="() => { window.open('http://localhost:8000/tower_3d.html', '_blank'); }")
+            #text_input.change(fn=update_ncols_max, inputs=text_input, outputs=ncols_slider)
+        # ─── 탭 2: 역방향 ───────────────────────────────────────────────────
+        with gr.Tab("역방향: 이미지 → 시"):
+            with gr.Row():
+                # 좌측 (Scale=1)
+                with gr.Column(scale=1):
+                    image_input = gr.Image(type="filepath", label="영감을 줄 이미지 업로드")
+                    
+                    with gr.Accordion("⚙️ 시 생성 옵션", open=False):
+                        resolution_dropdown = gr.Dropdown(["8×8", "10×10", "16×16", "32×32"], value="10×10", label="추상화 해상도")
+                        keyword_input = gr.Textbox(label="심상 키워드 (선택)")
+                        alpha_slider = gr.Slider(0.0, 1.0, value=0.5, label="α (순수 색상 ←→ 키워드 문맥)")
+                        
+                    reverse_btn = gr.Button("✍️ 공감각적 시 생성", variant="primary")
+                    
+                # 우측 (Scale=2)
+                with gr.Column(scale=2):
+                    poem_out = gr.Textbox(label="생성된 구조적 시", lines=20) # 시가 길어질 수 있으니 lines를 넉넉하게
+                    
+            # 이벤트 연결
+            reverse_btn.click(reverse_tab_handler, inputs=[image_input, resolution_dropdown, keyword_input, alpha_slider], outputs=[poem_out])
+            
+    return demo
+
+
+if __name__ == "__main__":
+    demo = build_ui()
+    # share=True를 주면 외부 링크가 생성되어 교수님/팀원 시연에 편리합니다.
+    demo.launch(share=True)

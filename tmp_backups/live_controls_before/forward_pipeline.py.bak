@@ -274,28 +274,6 @@ def blend(rgb_syn_val: np.ndarray, rgb_uni_val: np.ndarray,
     return np.clip(rgb_out, 0, 255).astype(np.float32)
 
 
-def reblend_forward_results(word_colors: list[dict], beta: float, gamma: float,
-                            grain_amount: float) -> list[dict]:
-    """Recalculate display colors from saved model outputs without rerunning BERT."""
-    eagleman = load_eagleman()
-    updated = []
-
-    for item in word_colors:
-        word = item.get("word", "")
-        r_syn = np.asarray(item.get("rgb_syn", [128, 128, 128]), dtype=np.float32)
-        r_uni = np.asarray(item.get("rgb_uni", [128, 128, 128]), dtype=np.float32)
-        r_grapheme = get_grapheme_color(word, eagleman)
-        r_out = blend(r_syn, r_uni, r_grapheme, beta, gamma)
-
-        updated.append({
-            **item,
-            "rgb_out": r_out.astype(int).tolist(),
-            "char_rgbs": apply_grain_to_word(word, r_out, eagleman, grain_amount),
-        })
-
-    return updated
-
-
 # ─── 전체 파이프라인 ──────────────────────────────────────────────────────────
 
 def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0,

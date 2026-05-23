@@ -10,10 +10,8 @@ app.py — Gradio 인터랙티브 웹 데모
     python src/app.py
 """
 
-import html
-import math
 import gradio as gr
-from PIL import Image
+import math
 from forward_pipeline import reblend_forward_results, run_forward
 from reverse_pipeline import run_reverse
 from visualizer import make_color_bar, make_2d_image, make_3d_tower
@@ -200,51 +198,6 @@ html, body, .gradio-container {
 #image-unit-toggle [role="radio"][aria-checked="true"] * {
     color: var(--control-active-text) !important;
 }
-
-.reverse-map-wrap {
-    max-height: 440px;
-    overflow-y: auto;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--surface-1);
-}
-
-.reverse-map-table {
-    width: 100%;
-    border-collapse: collapse;
-    color: var(--text);
-    font-size: 13px;
-}
-
-.reverse-map-table th {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    padding: 10px 12px;
-    background: #222222;
-    border-bottom: 1px solid var(--border-strong);
-    color: var(--text);
-    text-align: left;
-}
-
-.reverse-map-table td {
-    padding: 8px 12px;
-    border-bottom: 1px solid #292929;
-    color: var(--text);
-}
-
-.reverse-map-table tr:hover td {
-    background: #252525;
-}
-
-.reverse-swatch {
-    display: inline-block;
-    width: 22px;
-    height: 22px;
-    border: 1px solid #7a7a7a;
-    border-radius: 4px;
-    vertical-align: middle;
-}
 """
 
 
@@ -300,41 +253,7 @@ def update_ncols_max(text: str):
 
 # ─── 탭 2: 역방향 ─────────────────────────────────────────────────────────────
 
-def make_simplified_reverse_image(pixels) -> Image.Image:
-    """Enlarge the downsampled RGB grid without smoothing pixel boundaries."""
-    base_img = Image.fromarray(pixels.astype("uint8"))
-    try:
-        resample_method = Image.Resampling.NEAREST
-    except AttributeError:
-        resample_method = Image.NEAREST
-    return base_img.resize((512, 512), resample=resample_method)
-
-
-def make_reverse_mapping_table(mapping_rows: list[dict]) -> str:
-    """Build a scrollable color-to-word table for reverse output inspection."""
-    body_rows = []
-    for row in mapping_rows:
-        rgb = row["rgb"]
-        hex_color = html.escape(row["hex"])
-        word = html.escape(row["word"])
-        body_rows.append(
-            "<tr>"
-            f"<td>({row['row']}, {row['col']})</td>"
-            f"<td><span class='reverse-swatch' style='background:{hex_color}'></span></td>"
-            f"<td>{rgb[0]}, {rgb[1]}, {rgb[2]}</td>"
-            f"<td>{hex_color}</td>"
-            f"<td>{word}</td>"
-            "</tr>"
-        )
-
-    return (
-        "<div class='reverse-map-wrap'><table class='reverse-map-table'>"
-        "<thead><tr><th>위치</th><th>색상</th><th>RGB</th><th>HEX</th><th>생성 단어</th></tr></thead>"
-        f"<tbody>{''.join(body_rows)}</tbody></table></div>"
-    )
-
-
-def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) -> tuple:
+def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) -> str:
     """Gradio 탭 2 이벤트 핸들러 — 이미지를 구조적 시로 변환한다."""
 
     # 1. resolution_str("8×8")을 (H, W) 튜플로 파싱
@@ -346,18 +265,15 @@ def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) 
         keyword = None
         alpha = 0.0
 
-    # 3. 역방향 파이프라인 실행 및 색상-단어 매핑 결과 획득
-    details = run_reverse(image, resolution, keyword, alpha, include_details=True)
-    poem_grid = details["word_grid"]
+    # 3. 역방향 파이프라인 실행 (2차원 단어 리스트 반환 가정)
+    poem_grid = run_reverse(image, resolution, keyword, alpha)
 
     # 4. 2차원 행렬을 "단어 단어 단어\n단어 단어 단어\n..." 형태의 텍스트로 결합
     lines = []
     for row in poem_grid:
         lines.append(" ".join(row))
 
-    simplified_image = make_simplified_reverse_image(details["pixels"])
-    mapping_table = make_reverse_mapping_table(details["mapping_rows"])
-    return simplified_image, "\n".join(lines), mapping_table
+    return "\n".join(lines)
 
 
 # ─── Gradio UI 구성 ───────────────────────────────────────────────────────────
@@ -441,18 +357,10 @@ def build_ui():
 
                 # 우측 (Scale=2)
                 with gr.Column(scale=2):
-                    with gr.Row():
-                        simplified_image_out = gr.Image(label="단순화된 색상 이미지")
-                        poem_out = gr.Textbox(label="생성된 구조적 시", lines=20)
-                    gr.Markdown("### 색상과 생성 단어의 대응")
-                    mapping_table_out = gr.HTML()
+                    poem_out = gr.Textbox(label="생성된 구조적 시", lines=20) # 시가 길어질 수 있으니 lines를 넉넉하게
 
             # 이벤트 연결
-            reverse_btn.click(
-                reverse_tab_handler,
-                inputs=[image_input, resolution_dropdown, keyword_input, alpha_slider],
-                outputs=[simplified_image_out, poem_out, mapping_table_out],
-            )
+            reverse_btn.click(reverse_tab_handler, inputs=[image_input, resolution_dropdown, keyword_input, alpha_slider], outputs=[poem_out])
 
     return demo
 
@@ -460,4 +368,4 @@ def build_ui():
 if __name__ == "__main__":
     demo = build_ui()
     # share=True를 주면 외부 링크가 생성되어 교수님/팀원 시연에 편리합니다.
-    demo.launch(share=True, theme=APP_THEME, css=APP_CSS)
+    demo.launch(share=False, theme=APP_THEME, css=APP_CSS)

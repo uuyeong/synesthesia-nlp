@@ -1,4 +1,4 @@
-"""
+﻿"""
 forward_pipeline.py — 정방향 파이프라인 (텍스트 → RGB)
 담당: 강유영 (A)
 
@@ -178,36 +178,14 @@ def rgb_uni(v_i: np.ndarray, A_R: np.ndarray, A_G: np.ndarray, A_B: np.ndarray) 
     def cosine(anchor):
         return np.dot(v_i, anchor) / (norm_i * (np.linalg.norm(anchor) + 1e-8))
 
-    cos_r = cosine(A_R)+1/2
-    cos_g = cosine(A_G)+1/2
-    cos_b = cosine(A_B)+1/2
+    cos_r = cosine(A_R)
+    cos_g = cosine(A_G)
+    cos_b = cosine(A_B)
 
-    s_sum = cos_r + cos_g + cos_b
-
-    # 예외 처리: 모든 앵커와 유사도가 0이거나 음수인 경우 검은색 반환
-    if s_sum == 0.0:
-        return np.array([0, 0, 0], dtype=np.uint8)
-
-    # 3. 비중(Ratio) 계산 및 거듭제곱 (대비/채도 극대화)
-    r_ratio = (cos_r / s_sum) ** 2
-    g_ratio = (cos_g / s_sum) ** 2
-    b_ratio = (cos_b / s_sum) ** 2
-
-    # 4. 밝기(Brightness) 보정
-    # 유사도의 평균에 루트를 씌워 전반적인 명도를 잡아줍니다.
-    brightness = np.mean([cos_r, cos_g, cos_b]) ** 0.5
-
-    # 5. 최종 RGB 계산 (* 6 증폭)
-    # 6을 곱하는 것은 노출(Exposure)을 끌어올려 채도를 쨍하게 만드는 핵심 치트키 역할을 합니다.
-    r = int(r_ratio * brightness * 255 * 6)
-    g = int(g_ratio * brightness * 255 * 6)
-    b = int(b_ratio * brightness * 255 * 6)
-
-    # 6. 255를 넘는 값은 255로 제한(clipping)하고 numpy 배열로 반환
-    final_rgb = np.array([min(r, 255), min(g, 255), min(b, 255)], dtype=np.uint8)
-
-    return final_rgb
-
+    rgb = np.array([(cos_r + 1) / 2,
+                    (cos_g + 1) / 2,
+                    (cos_b + 1) / 2], dtype=np.float32) * 255.0
+    return rgb
 
 
 def get_grapheme_color(word: str, eagleman: dict) -> np.ndarray:
@@ -224,32 +202,6 @@ def get_grapheme_color(word: str, eagleman: dict) -> np.ndarray:
         return np.array([128.0, 128.0, 128.0], dtype=np.float32)
     key = word[0].upper()
     return eagleman.get(key, np.array([128.0, 128.0, 128.0], dtype=np.float32)).copy()
-
-
-def get_character_color(char: str, eagleman: dict) -> np.ndarray:
-    """Return the Eagleman RGB color for a single alphabetic character."""
-    if not char or not char.isalpha():
-        return np.array([128.0, 128.0, 128.0], dtype=np.float32)
-    key = char.upper()
-    return eagleman.get(key, np.array([128.0, 128.0, 128.0], dtype=np.float32)).copy()
-
-
-def apply_grain_to_word(word: str, base_rgb: np.ndarray,
-                        eagleman: dict, grain_amount: float) -> list[list[int]]:
-    """Blend each character in a word toward its grapheme color.
-
-    grain_amount=0 keeps the word-level color for every character.
-    grain_amount=1 uses each character's Eagleman grapheme color.
-    """
-    grain_amount = float(np.clip(grain_amount, 0.0, 1.0))
-    base_rgb = np.asarray(base_rgb, dtype=np.float32)
-
-    char_rgbs = []
-    for char in word:
-        grapheme_rgb = get_character_color(char, eagleman)
-        char_rgb = base_rgb + grain_amount * (grapheme_rgb - base_rgb)
-        char_rgbs.append(np.clip(char_rgb, 0, 255).astype(int).tolist())
-    return char_rgbs
 
 
 def blend(rgb_syn_val: np.ndarray, rgb_uni_val: np.ndarray,
@@ -274,49 +226,19 @@ def blend(rgb_syn_val: np.ndarray, rgb_uni_val: np.ndarray,
     return np.clip(rgb_out, 0, 255).astype(np.float32)
 
 
-def reblend_forward_results(word_colors: list[dict], beta: float, gamma: float,
-                            grain_amount: float) -> list[dict]:
-    """Recalculate display colors from saved model outputs without rerunning BERT."""
-    eagleman = load_eagleman()
-    updated = []
-
-    for item in word_colors:
-        word = item.get("word", "")
-        r_syn = np.asarray(item.get("rgb_syn", [128, 128, 128]), dtype=np.float32)
-        r_uni = np.asarray(item.get("rgb_uni", [128, 128, 128]), dtype=np.float32)
-        r_grapheme = get_grapheme_color(word, eagleman)
-        r_out = blend(r_syn, r_uni, r_grapheme, beta, gamma)
-
-        updated.append({
-            **item,
-            "rgb_out": r_out.astype(int).tolist(),
-            "char_rgbs": apply_grain_to_word(word, r_out, eagleman, grain_amount),
-        })
-
-    return updated
-
-
 # ─── 전체 파이프라인 ──────────────────────────────────────────────────────────
 
-def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0,
-                grain_amount: float = 0.0) -> list[dict]:
+def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0) -> list[dict]:
     """텍스트를 받아 단어별 RGB 색상 리스트를 반환하는 메인 함수.
 
     Args:
         text: 입력 텍스트 (시, 문장 등)
         beta: 공감각 비중 (0~1)
         gamma: 알파벳 노이즈 강도 (0~1)
-        grain_amount: 글자별 그래핌 색 적용량 (0~1)
 
     Returns:
         list[dict]: 단어별 결과
-            [{
-                "word": str,
-                "rgb_syn": [R,G,B],
-                "rgb_uni": [R,G,B],
-                "rgb_out": [R,G,B],
-                "char_rgbs": [[R,G,B], ...],
-            }, ...]
+            [{"word": str, "rgb_syn": [R,G,B], "rgb_uni": [R,G,B], "rgb_out": [R,G,B]}, ...]
     """
     tokenizer, bert_model = load_bert()
     mean_vec, A_R, A_G, A_B = load_anchors()
@@ -339,14 +261,12 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0,
         r_syn = rgb_syn(v_i, mlp) if mlp is not None else r_uni.copy()
         r_grapheme = get_grapheme_color(word, eagleman)
         r_out = blend(r_syn, r_uni, r_grapheme, beta, gamma)
-        char_rgbs = apply_grain_to_word(word, r_out, eagleman, grain_amount)
 
         results.append({
             "word":    word,
             "rgb_syn": r_syn.astype(int).tolist(),
             "rgb_uni": r_uni.astype(int).tolist(),
             "rgb_out": r_out.astype(int).tolist(),
-            "char_rgbs": char_rgbs,
         })
 
     return results
@@ -444,9 +364,8 @@ if __name__ == "__main__":
     results = run_forward("The night was silent and cold", beta=0.5, gamma=0.0)
     assert len(results) == 6
     for r in results:
-        assert set(r.keys()) == {"word", "rgb_syn", "rgb_uni", "rgb_out", "char_rgbs"}
+        assert set(r.keys()) == {"word", "rgb_syn", "rgb_uni", "rgb_out"}
         assert len(r["rgb_out"]) == 3
-        assert len(r["char_rgbs"]) == len(r["word"])
         assert all(0 <= v <= 255 for v in r["rgb_out"])
         print(f"  ✓ '{r['word']}' → rgb_out={r['rgb_out']}")
 

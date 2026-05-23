@@ -65,11 +65,11 @@ def make_2d_image(word_colors: list[dict], unit: str = "character") -> Image.Ima
 
     # 예외 처리: 데이터가 없는 경우 빈 회색 이미지 반환
     if not word_colors:
-        return Image.new("RGB", (target_size, target_size), (0, 0, 0))
+        return Image.new("RGB", (target_size, target_size), (128, 128, 128))
 
     # 1. 보기 모드에 따라 단어 또는 글자 RGB를 추출한다.
     if unit == "word":
-        rgbs = [item.get("rgb_out", [0, 0, 0]) for item in word_colors]
+        rgbs = [item.get("rgb_out", [128, 128, 128]) for item in word_colors]
     else:
         rgbs = []
         for item in word_colors:
@@ -78,11 +78,11 @@ def make_2d_image(word_colors: list[dict], unit: str = "character") -> Image.Ima
                 rgbs.extend(char_rgbs)
             else:
                 word = item.get("word", "")
-                rgb = item.get("rgb_out", [0, 0, 0])
+                rgb = item.get("rgb_out", [128, 128, 128])
                 rgbs.extend([rgb] * max(1, len(word)))
 
     if not rgbs:
-        return Image.new("RGB", (target_size, target_size), (0, 0, 0))
+        return Image.new("RGB", (target_size, target_size), (128, 128, 128))
 
     L = len(rgbs)
 
@@ -95,7 +95,7 @@ def make_2d_image(word_colors: list[dict], unit: str = "character") -> Image.Ima
     # 3. 패딩(Padding) 처리: N x N 개수에 모자란 만큼 빈칸을 회색(128,128,128)으로 채움
     padding_size = (N * N) - L
     if padding_size > 0:
-        rgbs.extend([[0, 0, 0]] * padding_size)
+        rgbs.extend([[128, 128, 128]] * padding_size)
 
     # 4. (N, N, 3) 형태의 numpy 3차원 배열로 완벽한 1:1 reshape
     arr = np.array(rgbs, dtype=np.uint8)
@@ -120,10 +120,10 @@ def make_color_bar(word_colors: list[dict]) -> Image.Image:
 
     # 예외 처리: 데이터가 없는 경우 회색 이미지 반환
     if not word_colors:
-        return Image.new("RGB", (target_width, target_height), (0, 0, 0))
+        return Image.new("RGB", (target_width, target_height), (128, 128, 128))
 
     # 1. 모든 단어(또는 글자)의 RGB 값 추출
-    rgbs = [item.get("rgb_out", [0, 0, 0]) for item in word_colors]
+    rgbs = [item.get("rgb_out", [128, 128, 128]) for item in word_colors]
 
     # 2. 1줄짜리 원본 numpy 배열 생성 (Shape: 1 x 단어수 x 3)
     arr = np.array([rgbs], dtype=np.uint8)
@@ -211,7 +211,7 @@ def make_3d_tower(word_colors: list[dict]) -> go.Figure:
 
             mode="markers+lines",
 
-            marker=dict(size=3, color=marker_colors[:1], opacity=0.9, line=dict(width=1, color="#666666")),
+            marker=dict(size=3, color=marker_colors[:1], opacity=0.9, line=dict(width=1, color='DarkSlateGrey')),
             line=dict(color='rgba(200, 200, 200, 0.2)', width=0.5),
             text=hover_texts[:1],
             hoverinfo='text'
@@ -289,36 +289,24 @@ def make_3d_tower(word_colors: list[dict]) -> go.Figure:
             t=0
         ),
 
-        paper_bgcolor="#101010",
-        plot_bgcolor="#101010",
-        font=dict(color="#d0d0d0"),
+        paper_bgcolor="rgba(0,0,0,0)",
 
         scene=dict(
-            bgcolor="#101010",
 
             xaxis=dict(
                 title="X",
-                backgroundcolor="#1a1a1a",
-                gridcolor="#404040",
-                linecolor="#606060",
-                zerolinecolor="#606060",
+                backgroundcolor="rgba(0,0,0,0)",
             ),
 
             yaxis=dict(
                 title="Y",
-                backgroundcolor="#1a1a1a",
-                gridcolor="#404040",
-                linecolor="#606060",
-                zerolinecolor="#606060",
+                backgroundcolor="rgba(0,0,0,0)",
             ),
 
             zaxis=dict(
                 title="Time",
                 range=[0, total_words],
-                backgroundcolor="#1a1a1a",
-                gridcolor="#404040",
-                linecolor="#606060",
-                zerolinecolor="#606060",
+                backgroundcolor="rgba(0,0,0,0)",
             ),
         ),
 
@@ -329,18 +317,14 @@ def make_3d_tower(word_colors: list[dict]) -> go.Figure:
                 active=0,
 
                 currentvalue=dict(
-                    prefix="Words: ",
-                    font=dict(color="#d0d0d0"),
+                    prefix="Words: "
                 ),
 
                 pad=dict(
                     t=30
                 ),
 
-                steps=slider_steps,
-                bgcolor="#242424",
-                bordercolor="#505050",
-                font=dict(color="#d0d0d0"),
+                steps=slider_steps
             )
         ]
     )
