@@ -13,11 +13,13 @@ forward_pipeline.py — 정방향 파이프라인 (텍스트 → RGB)
 """
 
 import re
+from functools import cache
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from pathlib import Path
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
@@ -43,8 +45,51 @@ class SynesthesiaMLP(nn.Module):
 
 # ─── 모델 로드 ────────────────────────────────────────────────────────────────
 
+def _require_data_files(file_descriptions: dict) -> None:
+    """필수 데이터 파일 존재 여부를 친절한 에러로 안내한다.
+
+    Args:
+        file_descriptions: {파일명: 설명} 매핑. 모든 키는 data/ 기준 상대 경로.
+
+    Raises:
+        FileNotFoundError: 누락된 파일이 있을 때, 어떤 파일이 어떤 역할인지 모두 표시.
+    """
+    missing = [(name, desc) for name, desc in file_descriptions.items()
+               if not (DATA_DIR / name).exists()]
+    if missing:
+        msg_lines = [
+            "다음 필수 파일이 data/ 디렉터리에 없습니다:",
+            *(f"  - data/{name}  ({desc})" for name, desc in missing),
+            "팀 공유 채널(드라이브/카톡)에서 받아서 data/ 에 두고 다시 실행하세요.",
+        ]
+        raise FileNotFoundError("\n".join(msg_lines))
+
+
+def _assert_anchors_centered(A_R: np.ndarray, A_G: np.ndarray,
+                             A_B: np.ndarray) -> None:
+    """anchor 가 mean-centered 인지 self-check.
+
+    raw BERT 평균 anchor 라면 anisotropy 때문에 anchor 끼리 cosine ≈ 0.9 가 됨.
+    검증 보고서 기준 centered anchor 는 cos 0.23~0.47. 이 함수는 max cos > 0.8
+    이면 silent corruption 가능성으로 보고 RuntimeError 를 던진다.
+    """
+    def cos(a, b):
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
+
+    pairs = {"R-G": cos(A_R, A_G), "R-B": cos(A_R, A_B), "G-B": cos(A_G, A_B)}
+    max_pair, max_cos = max(pairs.items(), key=lambda x: x[1])
+    if max_cos > 0.8:
+        raise RuntimeError(
+            f"anchor 가 mean-centered 가 아닐 가능성이 큽니다 "
+            f"(max anchor-anchor cos = {max_cos:.3f} @ {max_pair}). "
+            f"센터링이 적용됐다면 0.2~0.5 범위여야 합니다. "
+            f"data/bert_anchor_*.npy 재생성이 필요할 수 있습니다."
+        )
+
+
+@cache
 def load_bert():
-    """BERT 토크나이저와 모델을 로드한다.
+    """BERT 토크나이저와 모델을 로드한다 (프로세스당 1회만 실제 로드, 이후 캐시 반환).
 
     Returns:
         tokenizer: BertTokenizer
@@ -56,8 +101,13 @@ def load_bert():
     return tokenizer, model
 
 
+@cache
 def load_anchors():
-    """저장된 BERT Mean Centering 벡터와 RGB 앵커 벡터를 로드한다.
+    """저장된 BERT Mean Centering 벡터와 RGB 앵커 벡터를 로드한다 (캐시).
+
+    로드 시점에 두 가지 자동 검증을 수행한다:
+    1. 필수 4개 .npy 파일 존재 (없으면 친절한 메시지)
+    2. anchor 가 mean-centered 인지 (raw anchor 가 들어오면 cos 가 0.9+ → 즉시 에러)
 
     Returns:
         mean_vec (np.ndarray): shape (768,)
@@ -65,36 +115,70 @@ def load_anchors():
         A_G (np.ndarray): shape (768,)
         A_B (np.ndarray): shape (768,)
     """
+    _require_data_files({
+        "bert_mean_vec.npy": "BERT anisotropy 보정용 평균 벡터",
+        "bert_anchor_R.npy": "Red 앵커 (mean-centered)",
+        "bert_anchor_G.npy": "Green 앵커 (mean-centered)",
+        "bert_anchor_B.npy": "Blue 앵커 (mean-centered)",
+    })
     mean_vec = np.load(DATA_DIR / "bert_mean_vec.npy")
     A_R      = np.load(DATA_DIR / "bert_anchor_R.npy")
     A_G      = np.load(DATA_DIR / "bert_anchor_G.npy")
     A_B      = np.load(DATA_DIR / "bert_anchor_B.npy")
+    _assert_anchors_centered(A_R, A_G, A_B)
     return mean_vec, A_R, A_G, A_B
 
 
+def _torch_load_state(weights_path):
+    """torch.load weights_only 인자 호환 래퍼.
+
+    PyTorch >=1.13 에서는 weights_only=True 사용 (보안 권장, 2.6+ 부터 기본값).
+    구버전(<1.13) 은 인자 자체를 모르므로 TypeError fallback.
+    """
+    try:
+        return torch.load(weights_path, map_location="cpu", weights_only=True)
+    except TypeError:
+        return torch.load(weights_path, map_location="cpu")
+
+
+@cache
 def load_mlp(weights_path=None) -> SynesthesiaMLP:
-    """학습된 MLP 가중치를 로드한다.
+    """학습된 MLP 가중치를 로드한다 (캐시).
 
     Args:
         weights_path: mlp_weights.pt 경로 (None이면 data/ 디렉터리 기본값 사용)
+
+    Raises:
+        FileNotFoundError: weights 파일이 없을 때 (재학습 또는 팀 공유 안내 메시지 포함).
 
     Returns:
         SynesthesiaMLP (eval 모드)
     """
     if weights_path is None:
         weights_path = DATA_DIR / "mlp_weights.pt"
+    weights_path = Path(weights_path)
+    if not weights_path.exists():
+        raise FileNotFoundError(
+            f"MLP weights 파일이 없습니다: {weights_path}\n"
+            f"  - 직접 학습: python src/train_mlp.py\n"
+            f"  - 또는 팀 공유 채널에서 mlp_weights.pt 를 받아 data/ 에 둘 것"
+        )
     mlp = SynesthesiaMLP()
-    mlp.load_state_dict(torch.load(weights_path, map_location="cpu"))
+    mlp.load_state_dict(_torch_load_state(weights_path))
     mlp.eval()
     return mlp
 
 
+@cache
 def load_eagleman() -> dict:
-    """synesthesia_grapheme_mean_rgb.csv에서 알파벳 → RGB 딕셔너리를 생성한다.
+    """synesthesia_grapheme_mean_rgb.csv에서 알파벳 → RGB 딕셔너리를 생성한다 (캐시).
 
     Returns:
         dict: {대문자 알파벳 → np.ndarray (3,)} 형태
     """
+    _require_data_files({
+        "synesthesia_grapheme_mean_rgb.csv": "Eagleman 알파벳-RGB ground truth",
+    })
     df = pd.read_csv(DATA_DIR / "synesthesia_grapheme_mean_rgb.csv")
     eagleman = {}
     for _, row in df.iterrows():
@@ -102,6 +186,30 @@ def load_eagleman() -> dict:
         rgb = np.array([row["R_0_255"], row["G_0_255"], row["B_0_255"]], dtype=np.float32)
         eagleman[letter] = rgb
     return eagleman
+
+
+def preflight_check() -> None:
+    """앱 진입점에서 한 번 호출해 필수 자산을 사전 확인한다.
+
+    `forward_pipeline` / `reverse_pipeline` 의 데이터 파일과 BERT 캐시 존재를
+    런타임 시작 전에 한꺼번에 검증해 시연 도중 갑작스러운 실패를 줄인다.
+    mlp_weights.pt 는 없어도 실행은 가능(rgb_syn 을 rgb_uni 로 대체)하므로
+    경고만 출력하고 통과.
+    """
+    _require_data_files({
+        "bert_mean_vec.npy": "BERT anisotropy 보정용 평균 벡터",
+        "bert_anchor_R.npy": "Red 앵커 (mean-centered)",
+        "bert_anchor_G.npy": "Green 앵커 (mean-centered)",
+        "bert_anchor_B.npy": "Blue 앵커 (mean-centered)",
+        "synesthesia_grapheme_mean_rgb.csv": "Eagleman 알파벳-RGB ground truth",
+        "nrc_word_rgb.csv": "NRC 단어-RGB 학습 데이터",
+        "poetry_candidate_words.txt": "역방향 후보 단어 집합",
+    })
+    if not (DATA_DIR / "mlp_weights.pt").exists():
+        print("[preflight] data/mlp_weights.pt 없음 — rgb_syn 이 rgb_uni 로 대체됩니다. "
+              "학습: python src/train_mlp.py")
+    # anchor centered 검증은 load_anchors 호출로 트리거
+    load_anchors()
 
 
 # ─── 임베딩 ──────────────────────────────────────────────────────────────────
@@ -119,12 +227,20 @@ def get_bert_vector(word: str, tokenizer, model, mean_vec: np.ndarray) -> np.nda
 
     Returns:
         np.ndarray: Mean Centering 적용된 벡터 (768,)
+
+    Raises:
+        ValueError: word가 빈 문자열이거나 [CLS]/[SEP] 외 서브워드가 잡히지 않을 때.
+                    (이 경우 평균 풀링 결과가 NaN이 되므로 caller가 인지하도록 막는다.)
     """
+    if not word:
+        raise ValueError("get_bert_vector: empty word")
     inputs = tokenizer(word, return_tensors="pt")
     with torch.no_grad():
         out = model(**inputs)
     # [CLS](인덱스 0)와 [SEP](인덱스 -1) 제외, 서브워드 토큰만 추출
     subword_vecs = out.last_hidden_state[0, 1:-1, :].detach().numpy()
+    if subword_vecs.shape[0] == 0:
+        raise ValueError(f"get_bert_vector: no subword tokens for '{word}'")
     vec = subword_vecs.mean(axis=0)  # 서브워드 여러 개 → 평균 풀링
     return vec - mean_vec
 
@@ -240,6 +356,7 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0) -> list[dict]:
         list[dict]: 단어별 결과
             [{"word": str, "rgb_syn": [R,G,B], "rgb_uni": [R,G,B], "rgb_out": [R,G,B]}, ...]
     """
+    # load_* 함수들은 @cache 데코레이터로 1회만 실제 로드 → 매 호출 BERT 재로딩 비용 없음.
     tokenizer, bert_model = load_bert()
     mean_vec, A_R, A_G, A_B = load_anchors()
     eagleman = load_eagleman()
@@ -262,11 +379,12 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0) -> list[dict]:
         r_grapheme = get_grapheme_color(word, eagleman)
         r_out = blend(r_syn, r_uni, r_grapheme, beta, gamma)
 
+        # np.rint: truncation 대신 반올림 (0~255 변환 시 시스템적 -0.5 편향 제거)
         results.append({
             "word":    word,
-            "rgb_syn": r_syn.astype(int).tolist(),
-            "rgb_uni": r_uni.astype(int).tolist(),
-            "rgb_out": r_out.astype(int).tolist(),
+            "rgb_syn": np.rint(r_syn).astype(int).tolist(),
+            "rgb_uni": np.rint(r_uni).astype(int).tolist(),
+            "rgb_out": np.rint(r_out).astype(int).tolist(),
         })
 
     return results
