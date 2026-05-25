@@ -15,7 +15,7 @@ import math
 import gradio as gr
 from PIL import Image
 from forward_pipeline import reblend_forward_results, run_forward
-from reverse_pipeline import run_reverse
+from reverse_pipeline import run_reverse_with_details
 from visualizer import make_color_bar, make_2d_image, make_3d_tower
 
 
@@ -23,27 +23,35 @@ APP_THEME = gr.themes.Monochrome()
 
 APP_CSS = """
 :root {
-    --surface-0: #141414;
-    --surface-1: #111111;
-    --surface-2: #181818;
-    --surface-3: #242424;
-    --border: #383838;
-    --border-strong: #565656;
-    --text: #eeeeee;
-    --text-muted: #adadad;
-    --control-hover: #343434;
-    --control-active: #e3e3e3;
+    --surface-0: #191919;
+    --surface-1: #191919;
+    --surface-2: #252525;
+    --surface-3: #333333;
+    --field: #0d0d0d;
+    --border: #4a4a4a;
+    --border-strong: #747474;
+    --text: #f4f4f4;
+    --text-muted: #c6c6c6;
+    --control-hover: #3f3f3f;
+    --control-active: #f1f1f1;
     --control-active-text: #111111;
 }
 
 html, body, .gradio-container {
     background: var(--surface-0) !important;
     color: var(--text) !important;
-    font-family: "Malgun Gothic", "맑은 고딕", "Noto Sans KR", "Segoe UI", Arial, sans-serif !important;
+    -webkit-text-fill-color: var(--text);
+    font-family: "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕",
+                 "Noto Sans KR", "Segoe UI", Arial, sans-serif !important;
 }
 
 .gradio-container {
     min-height: 100vh;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 24px 32px !important;
+    box-sizing: border-box !important;
 }
 
 .gradio-container * {
@@ -56,6 +64,7 @@ html, body, .gradio-container {
 .gradio-container p,
 .gradio-container h1 {
     color: var(--text) !important;
+    -webkit-text-fill-color: var(--text);
 }
 
 .gradio-container .block,
@@ -70,14 +79,16 @@ html, body, .gradio-container {
 .gradio-container textarea,
 .gradio-container input,
 .gradio-container select {
-    background: var(--surface-2) !important;
+    background: var(--field) !important;
     border-color: var(--border) !important;
     color: var(--text) !important;
+    -webkit-text-fill-color: var(--text) !important;
 }
 
 .gradio-container textarea::placeholder,
 .gradio-container input::placeholder {
     color: var(--text-muted) !important;
+    -webkit-text-fill-color: var(--text-muted) !important;
 }
 
 .gradio-container button,
@@ -86,6 +97,7 @@ html, body, .gradio-container {
     background: var(--surface-2) !important;
     border-color: var(--border) !important;
     color: var(--text) !important;
+    -webkit-text-fill-color: var(--text) !important;
     transition: background-color 160ms ease, border-color 160ms ease,
                 color 160ms ease, transform 160ms ease, box-shadow 160ms ease !important;
 }
@@ -174,13 +186,74 @@ html, body, .gradio-container {
     transform: translateY(1px);
 }
 
+#reverse-generate-btn,
+#reverse-generate-btn button {
+    background: #303030 !important;
+    border-color: #686868 !important;
+    cursor: pointer !important;
+    transition: background-color 160ms ease, border-color 160ms ease,
+                transform 160ms ease, box-shadow 160ms ease !important;
+}
+
+#reverse-generate-btn:hover,
+#reverse-generate-btn button:hover {
+    background: #484848 !important;
+    border-color: #9a9a9a !important;
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.38) !important;
+    transform: translateY(-1px);
+}
+
+#reverse-generate-btn:active,
+#reverse-generate-btn button:active {
+    background: #202020 !important;
+    box-shadow: none !important;
+    transform: translateY(1px);
+}
+
+#resolution-dropdown,
+#resolution-dropdown *,
+#resolution-dropdown input,
+#resolution-dropdown button,
+#resolution-dropdown [role="button"],
+#resolution-dropdown [role="combobox"] {
+    cursor: pointer !important;
+}
+
 #image-unit-toggle label,
 #image-unit-toggle [role="radio"] {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-width: 118px !important;
+    min-height: 36px !important;
+    padding: 0 14px !important;
     border: 1px solid var(--border) !important;
     border-radius: 6px !important;
     background: var(--surface-2) !important;
+    text-align: center !important;
     transition: background-color 160ms ease, border-color 160ms ease,
                 color 160ms ease, transform 160ms ease !important;
+}
+
+#image-unit-toggle label span,
+#image-unit-toggle [role="radio"] span {
+    display: block !important;
+    width: 100% !important;
+    text-align: center !important;
+}
+
+#image-unit-toggle input[type="radio"],
+#image-unit-toggle label input[type="radio"],
+#image-unit-toggle [role="radio"]::before,
+#image-unit-toggle [role="radio"]::after {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    margin: 0 !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
 }
 
 #image-unit-toggle label:hover,
@@ -191,14 +264,17 @@ html, body, .gradio-container {
 }
 
 #image-unit-toggle label:has(input:checked),
+#image-unit-toggle label.selected,
 #image-unit-toggle [role="radio"][aria-checked="true"] {
     background: var(--control-active) !important;
     border-color: var(--control-active) !important;
 }
 
 #image-unit-toggle label:has(input:checked) *,
+#image-unit-toggle label.selected *,
 #image-unit-toggle [role="radio"][aria-checked="true"] * {
     color: var(--control-active-text) !important;
+    -webkit-text-fill-color: var(--control-active-text) !important;
 }
 
 .reverse-map-wrap {
@@ -245,6 +321,40 @@ html, body, .gradio-container {
     border-radius: 4px;
     vertical-align: middle;
 }
+
+#reverse-results-column {
+    gap: 18px !important;
+}
+
+#reverse-results-column textarea {
+    min-height: 260px !important;
+}
+
+#reverse-results-column img {
+    image-rendering: pixelated;
+}
+
+@media (max-width: 900px) {
+    .gradio-container {
+        padding: 16px 14px !important;
+    }
+
+    #reverse-layout {
+        flex-direction: column !important;
+        gap: 18px !important;
+    }
+
+    #reverse-layout > div {
+        min-width: 100% !important;
+        width: 100% !important;
+    }
+
+    #image-unit-toggle label,
+    #image-unit-toggle [role="radio"] {
+        width: 100% !important;
+        justify-content: center !important;
+    }
+}
 """
 
 
@@ -279,23 +389,6 @@ def refresh_forward_2d(word_colors: list[dict], beta: float, gamma: float,
     """Refresh only the mode/grain-sensitive 2D view."""
     updated = reblend_forward_results(word_colors or [], beta, gamma, grain_amount)
     return make_2d_image(updated, unit=image_unit)
-
-def update_ncols_max(text: str):
-    """입력된 텍스트 길이에 따라 ncols 슬라이더의 최대값을 16:9 비율 한계로 동적 조정한다."""
-    if not text or len(text) == 0:
-        return gr.update(maximum=32)  # 기본 텍스트가 없을 때의 최대값
-
-    L = len(text)
-    # 16:9 비율을 유지하기 위한 최대 가로 픽셀 수 계산: C = (4/3) * sqrt(L)
-    max_c = int((4 / 3) * math.sqrt(L))
-    max_c = max(8, max_c)
-
-    # 2. 정사각형(1:1) 비율이 되는 가로 길이 계산 (루트 L)
-    square_c = int(math.sqrt(L))
-    square_c = max(8, square_c) # 너무 좁아지지 않도록 최소 8픽셀 보장
-
-    # 슬라이더의 최대값과 현재 조작바의 위치(value)를 동시에 업데이트
-    return gr.update(maximum=max_c, value=square_c)
 
 
 # ─── 탭 2: 역방향 ─────────────────────────────────────────────────────────────
@@ -337,6 +430,9 @@ def make_reverse_mapping_table(mapping_rows: list[dict]) -> str:
 def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) -> tuple:
     """Gradio 탭 2 이벤트 핸들러 — 이미지를 구조적 시로 변환한다."""
 
+    if image is None:
+        return None, "이미지를 먼저 업로드한 뒤 다시 생성해 주세요.", ""
+
     # 1. resolution_str("8×8")을 (H, W) 튜플로 파싱
     res_parts = resolution_str.split("×")
     resolution = (int(res_parts[0]), int(res_parts[1]))
@@ -347,7 +443,7 @@ def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) 
         alpha = 0.0
 
     # 3. 역방향 파이프라인 실행 및 색상-단어 매핑 결과 획득
-    details = run_reverse(image, resolution, keyword, alpha, include_details=True)
+    details = run_reverse_with_details(image, resolution, keyword, alpha)
     poem_grid = details["word_grid"]
 
     # 4. 2차원 행렬을 "단어 단어 단어\n단어 단어 단어\n..." 형태의 텍스트로 결합
@@ -364,7 +460,7 @@ def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) 
 
 def build_ui():
     # 다크 모드가 전시에 더 몰입감을 줄 수 있어 theme을 약간 어둡게 튜닝하는 것도 좋습니다.
-    with gr.Blocks(title="Synesthetic AI") as demo:
+    with gr.Blocks(title="Synesthetic AI", theme=APP_THEME, css=APP_CSS) as demo:
         gr.Markdown("<h1 style='text-align: center;'>🧠 공감각 AI (Synesthetic AI)</h1>")
         gr.Markdown("<p style='text-align: center;'>기계의 눈으로 읽고, 시의 언어로 그리는 공감각 예술</p>")
 
@@ -377,16 +473,16 @@ def build_ui():
                     text_input = gr.Textbox(label="텍스트 입력 (시, 소설 등)", lines=8, placeholder="여기에 텍스트를 입력하세요...")
 
                     # 관람객이 복잡해하지 않도록 파라미터는 접어둡니다.
-                    with gr.Accordion("⚙️ 세부 파라미터 조절 (클릭하여 펼치기)", open=False):
+                    with gr.Accordion("⚙️ 세부 파라미터 조절", open=True):
                         beta_slider = gr.Slider(0.0, 1.0, value=0.5, step=0.01, label="색 모델 (Cosine ←→ MLP)")
                         gamma_slider = gr.Slider(0.0, 1.0, value=0.0, step=0.01, label="첫 글자 색 끌림")
-                        grain_slider = gr.Slider(0.0, 1.0, value=0.0, step=0.01, label="글자 결")
+                        grain_slider = gr.Slider(0.0, 1.0, value=0.0, step=0.01, label="글자 그레인 강도")
                         #ncols_slider = gr.Slider(8, 32, value=32, step=1, label="2D 이미지 가로 픽셀 수")
 
                     # 버튼들을 나란히 배치
                     with gr.Row():
                         run_btn = gr.Button("🎨 시각화 생성", variant="primary", elem_id="generate-btn")
-                        immersive_btn = gr.Button("🚀 3D 전체화면", variant="secondary")
+                        #immersive_btn = gr.Button("🚀 3D 전체화면", variant="secondary")
 
                 # 우측 (Scale=2): 결과물 중심의 넓은 캔버스
                 with gr.Column(scale=2):
@@ -394,7 +490,7 @@ def build_ui():
 
                     # [수정된 부분] gr.Row()를 제거하여 위아래로 한 줄씩 큼직하게 배치합니다.
                     image_unit = gr.Radio(
-                        choices=[("문자 질감", "character"), ("의미 흐름", "word")],
+                        choices=[("글자별 1픽셀", "character"), ("단어별 1픽셀", "word")],
                         value="character",
                         label="2D 이미지 단위",
                         elem_id="image-unit-toggle",
@@ -423,27 +519,26 @@ def build_ui():
                 outputs=[img_2d_out],
                 trigger_mode="always_last",
             )
-            immersive_btn.click(fn=None, inputs=None, outputs=None, js="() => { window.open('http://localhost:8000/tower_3d.html', '_blank'); }")
+            #immersive_btn.click(fn=None, inputs=None, outputs=None, js="() => { window.open('http://localhost:8000/tower_3d.html', '_blank'); }")
             #text_input.change(fn=update_ncols_max, inputs=text_input, outputs=ncols_slider)
         # ─── 탭 2: 역방향 ───────────────────────────────────────────────────
         with gr.Tab("역방향: 이미지 → 시"):
-            with gr.Row():
+            with gr.Row(elem_id="reverse-layout"):
                 # 좌측 (Scale=1)
-                with gr.Column(scale=1):
+                with gr.Column(scale=1, min_width=280):
                     image_input = gr.Image(type="filepath", label="영감을 줄 이미지 업로드")
 
                     with gr.Accordion("⚙️ 시 생성 옵션", open=False):
-                        resolution_dropdown = gr.Dropdown(["8×8", "10×10", "16×16", "32×32"], value="10×10", label="추상화 해상도")
+                        resolution_dropdown = gr.Dropdown(["8×8", "10×10", "16×16", "32×32"], value="10×10", label="추상화 해상도", elem_id="resolution-dropdown")
                         keyword_input = gr.Textbox(label="심상 키워드 (선택)")
                         alpha_slider = gr.Slider(0.0, 1.0, value=0.5, label="α (순수 색상 ←→ 키워드 문맥)")
 
-                    reverse_btn = gr.Button("✍️ 공감각적 시 생성", variant="primary")
+                    reverse_btn = gr.Button("✍️ 공감각적 시 생성", variant="primary", elem_id="reverse-generate-btn")
 
                 # 우측 (Scale=2)
-                with gr.Column(scale=2):
-                    with gr.Row():
-                        simplified_image_out = gr.Image(label="단순화된 색상 이미지")
-                        poem_out = gr.Textbox(label="생성된 구조적 시", lines=20)
+                with gr.Column(scale=2, min_width=320, elem_id="reverse-results-column"):
+                    simplified_image_out = gr.Image(label="단순화된 색상 이미지")
+                    poem_out = gr.Textbox(label="생성된 구조적 시", lines=20)
                     gr.Markdown("### 색상과 생성 단어의 대응")
                     mapping_table_out = gr.HTML()
 
@@ -460,4 +555,4 @@ def build_ui():
 if __name__ == "__main__":
     demo = build_ui()
     # share=True를 주면 외부 링크가 생성되어 교수님/팀원 시연에 편리합니다.
-    demo.launch(share=True, theme=APP_THEME, css=APP_CSS)
+    demo.launch(share=True)

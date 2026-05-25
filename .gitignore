@@ -28,3 +28,6 @@ data/candidate_vectors.npy
 # Precomputed training vectors for MLP (generated locally by A)
 data/training_vectors.npy
 data/training_vectors.valid.npy
+
+.gradio/
+tmp_backups/

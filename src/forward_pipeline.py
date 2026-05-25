@@ -464,6 +464,7 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0,
             "rgb_syn": np.rint(r_syn).astype(int).tolist(),
             "rgb_uni": np.rint(r_uni).astype(int).tolist(),
             "rgb_out": np.rint(r_out).astype(int).tolist(),
+            "char_rgbs": char_rgbs,
         })
 
     return results

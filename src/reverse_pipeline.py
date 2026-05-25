@@ -129,29 +129,9 @@ def find_nearest_word(v_i, norm_mat, candidate_words, v_context=None, alpha=0.0)
 
 # ─── 전체 파이프라인 ──────────────────────────────────────────────────────────
 
-def run_reverse(image_path: str, resolution: tuple[int, int] = (8, 8),
-                keyword: str | None = None, alpha: float = 0.0,
-                include_details: bool = False) -> list[list[str]] | dict:
-    """이미지를 받아 격자 구조의 구조적 시(단어 행렬)를 반환하는 메인 함수.
-
-    Args:
-        image_path: 입력 이미지 경로
-        resolution: 다운샘플링 해상도 (H, W)
-        keyword: 문맥 키워드 (None이면 alpha=0 강제)
-        alpha: 키워드 문맥 혼합 비중 (0~1)
-        include_details: True이면 다운샘플 픽셀과 색상-단어 매핑도 반환
-
-    Returns:
-        기본값이면 H × W 단어 행렬. include_details=True이면 단어 행렬,
-        다운샘플 RGB 배열, 위치별 색상-단어 매핑을 담은 딕셔너리.
-    """
-    # TODO:
-    # 1. load_anchors(), load_candidate_words(), load_candidate_vectors()
-    # 2. downsample_image()로 픽셀 배열 획득
-    # 3. 각 픽셀에 pixel_to_vector() 적용
-    # 4. 키워드가 있으면 get_bert_vector(keyword)로 v_context 계산
-    # 5. find_nearest_word()로 단어 선택
-    # 6. H × W 행렬 형태로 반환
+def _run_reverse_core(image_path: str, resolution: tuple[int, int],
+                      keyword: str | None, alpha: float) -> dict:
+    """Run reverse generation and return the full internal result payload."""
     tokenizer, model = load_bert()
     mean_vec, A_R, A_G, A_B = load_anchors()
     candidate_words = load_candidate_words()
@@ -174,7 +154,8 @@ def run_reverse(image_path: str, resolution: tuple[int, int] = (8, 8),
     for h in range(H):
         row = []
         for w in range(W):
-            v_i = pixel_to_vector(pixels[h, w], A_R, A_G, A_B)
+            pixel_rgb = pixels[h, w]
+            v_i = pixel_to_vector(pixel_rgb, A_R, A_G, A_B)
             word = find_nearest_word(v_i, norm_mat, candidate_words, v_context, eff_alpha)
             row.append(word)
             mapping_rows.append({
@@ -186,10 +167,34 @@ def run_reverse(image_path: str, resolution: tuple[int, int] = (8, 8),
             })
         result.append(row)
 
-    if include_details:
-        return {
-            "word_grid": result,
-            "pixels": pixels,
-            "mapping_rows": mapping_rows,
-        }
-    return result
+    return {
+        "word_grid": result,
+        "pixels": pixels,
+        "mapping_rows": mapping_rows,
+    }
+
+
+def run_reverse(image_path: str, resolution: tuple[int, int] = (8, 8),
+                keyword: str | None = None, alpha: float = 0.0) -> list[list[str]]:
+    """이미지를 받아 격자 구조의 구조적 시(단어 행렬)를 반환하는 메인 함수.
+
+    Args:
+        image_path: 입력 이미지 경로
+        resolution: 다운샘플링 해상도 (H, W)
+        keyword: 문맥 키워드 (None이면 alpha=0 강제)
+        alpha: 키워드 문맥 혼합 비중 (0~1)
+
+    Returns:
+        list[list[str]]: H × W 단어 행렬 (격자 구조 유지)
+            예) [["burn", "flame", ...], ["ember", "dusk", ...], ...]
+    """
+    return _run_reverse_core(image_path, resolution, keyword, alpha)["word_grid"]
+
+
+def run_reverse_with_details(image_path: str, resolution: tuple[int, int] = (8, 8),
+                             keyword: str | None = None, alpha: float = 0.0) -> dict:
+    """이미지를 받아 단어 행렬, 다운샘플 픽셀, 색상-단어 매핑을 반환한다.
+
+    UI에서 단순화된 이미지와 색상-단어 대응표를 표시할 때 사용한다.
+    """
+    return _run_reverse_core(image_path, resolution, keyword, alpha)
