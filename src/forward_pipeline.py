@@ -294,9 +294,9 @@ def rgb_uni(v_i: np.ndarray, A_R: np.ndarray, A_G: np.ndarray, A_B: np.ndarray) 
     def cosine(anchor):
         return np.dot(v_i, anchor) / (norm_i * (np.linalg.norm(anchor) + 1e-8))
 
-    cos_r = cosine(A_R)+1/2
-    cos_g = cosine(A_G)+1/2
-    cos_b = cosine(A_B)+1/2
+    cos_r = (cosine(A_R)+1)/2
+    cos_g = (cosine(A_G)+1)/2
+    cos_b = (cosine(A_B)+1)/2
 
     s_sum = cos_r + cos_g + cos_b
 
