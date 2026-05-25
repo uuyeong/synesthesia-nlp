@@ -98,7 +98,8 @@ def find_nearest_word(v_i, norm_mat, candidate_words, v_context=None, alpha=0.0)
 
     Args:
         v_i: 픽셀 역변환 벡터 (768,)
-        candidate_matrix: 후보 단어 벡터 행렬 (N, 768)
+        norm_mat: 행 단위 L2 정규화된 후보 단어 행렬 (N, 768).
+                  호출 측에서 candidate_matrix를 미리 정규화해 전달해야 한다.
         candidate_words: 후보 단어 리스트 (N,)
         v_context: 키워드 문맥 벡터 (768,), alpha=0이면 None
         alpha: 키워드 문맥 혼합 비중 (0~1)
@@ -106,29 +107,24 @@ def find_nearest_word(v_i, norm_mat, candidate_words, v_context=None, alpha=0.0)
     Returns:
         str: 선택된 단어
     """
-    # TODO:
-    # 1. cosine_similarity(candidate_matrix, v_i) → (N,)
-    # 2. alpha > 0이면 cosine_similarity(candidate_matrix, v_context)도 계산
-    # 3. score = alpha * sim_context + (1-alpha) * sim_color
-    # 4. softmax 샘플링 또는 argmax
     norm_vi = v_i / (np.linalg.norm(v_i) + 1e-8)
     sim_color = norm_mat @ norm_vi
 
     if alpha > 0 and v_context is not None:
-        norm_vc = v_context / np.linalg.norm(v_context)
+        norm_vc = v_context / (np.linalg.norm(v_context) + 1e-8)
         sim_context = norm_mat @ norm_vc
     else:
         sim_context = np.zeros_like(sim_color)
 
     score = alpha * sim_context + (1 - alpha) * sim_color
 
-# argmax 대신 softmax 샘플링
-    temperature = 0.5  # 낮을수록 확실한 단어, 높을수록 다양
+    # softmax 샘플링 — temperature 낮을수록 확실한 단어, 높을수록 다양
+    temperature = 0.5
     score_exp = np.exp((score - score.max()) / temperature)
     prob = score_exp / score_exp.sum()
     idx = np.random.choice(len(candidate_words), p=prob)
     return candidate_words[idx]
-    
+
 
 
 # ─── 전체 파이프라인 ──────────────────────────────────────────────────────────
@@ -161,6 +157,12 @@ def run_reverse(image_path: str, resolution: tuple[int, int] = (8, 8),
     candidate_words = load_candidate_words()
     candidate_matrix = load_candidate_vectors(candidate_words, tokenizer, model, mean_vec)
 
+    # cosine similarity를 위해 후보 행렬을 1회만 행 단위 L2 정규화한다.
+    # (이전엔 raw 행렬이 그대로 전달되어 cosine이 아닌 단순 내적이 계산됐음)
+    norm_mat = candidate_matrix / (
+        np.linalg.norm(candidate_matrix, axis=1, keepdims=True) + 1e-8
+    )
+
     pixels = downsample_image(image_path, resolution)
     H, W = resolution
 
@@ -172,9 +174,8 @@ def run_reverse(image_path: str, resolution: tuple[int, int] = (8, 8),
     for h in range(H):
         row = []
         for w in range(W):
-            pixel_rgb = pixels[h, w]
-            v_i = pixel_to_vector(pixel_rgb, A_R, A_G, A_B)
-            word = find_nearest_word(v_i, candidate_matrix, candidate_words, v_context, eff_alpha)
+            v_i = pixel_to_vector(pixels[h, w], A_R, A_G, A_B)
+            word = find_nearest_word(v_i, norm_mat, candidate_words, v_context, eff_alpha)
             row.append(word)
             mapping_rows.append({
                 "row": h + 1,

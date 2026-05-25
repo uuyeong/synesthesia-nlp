@@ -71,6 +71,38 @@ ds = load_dataset("biglam/gutenberg-poetry-corpus", split="train")
 
 ---
 
+## 팀원 간 직접 공유 파일 (GitHub 미포함)
+
+### 4. mlp_weights.pt — A(강유영)가 공유
+
+**파일명:** `mlp_weights.pt`  
+**배치 경로:** `data/mlp_weights.pt`
+
+**설명:**  
+NRC 단어-색상 데이터 11,449쌍 + Eagleman 알파벳 데이터 26쌍으로 학습한 MLP 가중치 파일.  
+768차원 BERT 벡터를 입력받아 RGB 3채널(0~255)을 출력하는 신경망(768→32→3)의 학습 결과물.  
+`run_forward()` 호출 시 자동으로 로드되므로 **코드 수정 없이 파일만 배치하면 됩니다.**  
+파일이 없으면 `rgb_syn` 값이 `rgb_uni`로 대체되어 MLP 결과를 확인할 수 없습니다.
+
+**배치 방법:** A에게 파일을 받아 `data/` 폴더에 넣기
+
+---
+
+### 5. candidate_vectors.npy — B(이예원)가 공유
+
+**파일명:** `candidate_vectors.npy`  
+**배치 경로:** `data/candidate_vectors.npy`
+
+**설명:**  
+역방향 파이프라인의 후보 단어 9,942개에 대해 BERT 벡터를 사전 계산한 캐시 파일 (shape: 9942×768).  
+최초 계산에 약 15~30분이 소요되므로 B가 한 번만 계산해 팀 전체에 공유합니다.  
+`run_reverse()` 호출 시 자동으로 로드되므로 **코드 수정 없이 파일만 배치하면 됩니다.**  
+파일이 없으면 `run_reverse()` 첫 실행 시 자동 계산이 시작되어 오랜 시간이 걸립니다.
+
+**배치 방법:** B에게 파일을 받아 `data/` 폴더에 넣기
+
+---
+
 ## 최종 data/ 폴더 구조 (전부 배치 시)
 
 ```
@@ -83,9 +115,11 @@ data/
 ├── synesthesia_grapheme_mean_rgb.csv    # ✅ GitHub 포함
 ├── poetry_candidate_words.txt           # ✅ GitHub 포함
 ├── NRC-color-lexicon.txt                # ⬇️ 직접 다운로드
-└── Synesthesia/                         # ⬇️ 직접 다운로드
-    ├── data/
-    │   ├── EaglemanColoredAlphabets.mat
-    │   └── ...
-    └── ...
+├── Synesthesia/                         # ⬇️ 직접 다운로드
+│   ├── data/
+│   │   ├── EaglemanColoredAlphabets.mat
+│   │   └── ...
+│   └── ...
+├── mlp_weights.pt                       # 🤝 A(강유영)에게 받기
+└── candidate_vectors.npy                # 🤝 B(이예원)에게 받기
 ```
