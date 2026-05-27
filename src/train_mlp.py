@@ -12,6 +12,7 @@ train_mlp.py — MLP 학습 스크립트 (A 파트 2단계)
     data/mlp_weights.pt              (gitignore — 팀원에게 직접 공유)
     data/training_vectors.npy        (gitignore — BERT 벡터 캐시)
     data/training_vectors.valid.npy  (gitignore — 유효 인덱스 마스크)
+
 """
 
 import sys
