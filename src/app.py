@@ -461,7 +461,7 @@ def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) 
 def build_ui():
     # 다크 모드가 전시에 더 몰입감을 줄 수 있어 theme을 약간 어둡게 튜닝하는 것도 좋습니다.
     with gr.Blocks(title="Synesthetic AI", theme=APP_THEME, css=APP_CSS) as demo:
-        gr.Markdown("<h1 style='text-align: center;'>🧠 공감각 AI (Synesthetic AI)</h1>")
+        gr.Markdown("<h1 style='text-align: center;'>Synesthetic AI</h1>")
         gr.Markdown("<p style='text-align: center;'>기계의 눈으로 읽고, 시의 언어로 그리는 공감각 예술</p>")
 
         # ─── 탭 1: 정방향 ───────────────────────────────────────────────────
@@ -481,7 +481,7 @@ def build_ui():
 
                     # 버튼들을 나란히 배치
                     with gr.Row():
-                        run_btn = gr.Button("🎨 시각화 생성", variant="primary", elem_id="generate-btn")
+                        run_btn = gr.Button("시각화 생성", variant="primary", elem_id="generate-btn")
                         #immersive_btn = gr.Button("🚀 3D 전체화면", variant="secondary")
 
                 # 우측 (Scale=2): 결과물 중심의 넓은 캔버스
