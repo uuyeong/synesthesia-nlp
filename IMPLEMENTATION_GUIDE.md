@@ -396,7 +396,6 @@ synesthesia-nlp/
 │   └── candidate_vectors.npy           ⛔ .gitignore (B가 로컬 계산)
 ├── docs/
 │   ├── 명세서.md
-│   ├── 교수님_피드백_반영.md
 │   ├── bert_anchor_validation.md
 │   └── data_validation_report.md
 ├── DATA_GUIDE.md

@@ -39,7 +39,6 @@ synesthesia-nlp/
 │   └── poetry_candidate_words.txt      # 역방향 후보 단어 (9,942개)
 ├── docs/
 │   ├── 명세서.md                        # 프로젝트 명세서
-│   ├── 교수님_피드백_반영.md             # 교수님 피드백 및 검증 실험
 │   ├── bert_anchor_validation.md       # BERT 앵커 벡터 검증 보고서
 │   └── data_validation_report.md       # 데이터셋 검증 보고서
 ├── DATA_GUIDE.md             # 대용량 데이터 다운로드 안내

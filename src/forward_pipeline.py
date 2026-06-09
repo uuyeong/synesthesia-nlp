@@ -188,6 +188,16 @@ def load_eagleman() -> dict:
     return eagleman
 
 
+@cache
+def load_nrc_words() -> frozenset:
+    """NRC 학습 데이터에 실제 등장하는 단어 집합 (소문자, 캐시).
+
+    단어의 색이 '인간 실측(NRC)'인지 'AI 예측'인지 배지로 구분하는 데 쓴다.
+    """
+    df = pd.read_csv(DATA_DIR / "nrc_word_rgb.csv")
+    return frozenset(str(w).lower() for w in df["word"])
+
+
 def preflight_check() -> None:
     """앱 진입점에서 한 번 호출해 필수 자산을 사전 확인한다.
 
@@ -412,6 +422,82 @@ def reblend_forward_results(word_colors: list[dict], beta: float, gamma: float,
     return updated
 
 
+# ─── 색 출처·확신도 ──────────────────────────────────────────────────────────
+
+def anchor_strengths(v_i: np.ndarray, A_R: np.ndarray, A_G: np.ndarray,
+                     A_B: np.ndarray) -> np.ndarray:
+    """v_i 와 R/G/B 앵커의 정렬도 (cos+1)/2 ∈ [0,1] 3개를 반환한다."""
+    norm_i = np.linalg.norm(v_i) + 1e-8
+
+    def cos(anchor):
+        return float(np.dot(v_i, anchor) / (norm_i * (np.linalg.norm(anchor) + 1e-8)))
+
+    return np.array([(cos(A_R) + 1) / 2, (cos(A_G) + 1) / 2, (cos(A_B) + 1) / 2])
+
+
+def color_confidence(strengths: np.ndarray) -> float:
+    """지배 채널이 얼마나 뚜렷한가 (0=세 채널 동률·모호, 1=한 색이 완전 우세).
+
+    채널 점유율의 최댓값을 [1/3, 1] → [0, 1]로 선형 매핑한다.
+    """
+    share = strengths / (strengths.sum() + 1e-8)
+    return float(np.clip((share.max() - 1 / 3) / (2 / 3), 0.0, 1.0))
+
+
+def color_source(word: str, nrc_words: frozenset, eagleman: dict) -> str:
+    """단어 색의 근거 출처를 반환한다: "Eagleman" / "NRC" / "예측"."""
+    w = word.lower()
+    if len(w) == 1 and w.upper() in eagleman:
+        return "Eagleman"
+    if w in nrc_words:
+        return "NRC"
+    return "예측"
+
+
+@cache
+def recommend_vivid_words(n_per_channel: int = 6) -> dict:
+    """모델이 가장 '색이 뚜렷하다'고 보는 단어를 R/G/B별로 추천한다 (캐시).
+
+    candidate_vectors.npy 캐시가 있으면 시 코퍼스 9,942개에서 각 앵커 방향으로
+    가장 distinctive(지배 채널 마진이 큰) 단어를 고른다. 캐시가 없으면(팀원 환경)
+    검증된 큐레이션 폴백을 반환한다.
+    """
+    fallback = {
+        "R": ["crimson", "blood", "ember", "scarlet", "rust", "garnet"],
+        "G": ["emerald", "moss", "fern", "ivy", "jade", "verdant"],
+        "B": ["azure", "sapphire", "twilight", "cobalt", "indigo", "tide"],
+    }
+    cache_path = DATA_DIR / "candidate_vectors.npy"
+    words_path = DATA_DIR / "poetry_candidate_words.txt"
+    if not (cache_path.exists() and words_path.exists()):
+        return fallback
+
+    mat = np.load(cache_path)
+    words = words_path.read_text(encoding="utf-8").splitlines()
+    if len(words) != mat.shape[0]:
+        return fallback
+
+    _, A_R, A_G, A_B = load_anchors()
+    norm_mat = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-8)
+    anchors = {"R": A_R, "G": A_G, "B": A_B}
+    sims = {ch: norm_mat @ (A / (np.linalg.norm(A) + 1e-8))
+            for ch, A in anchors.items()}
+
+    result = {}
+    for ch in ("R", "G", "B"):
+        others = [sims[o] for o in anchors if o != ch]
+        margin = sims[ch] - np.maximum.reduce(others)  # 지배 채널 마진
+        picks = []
+        for idx in np.argsort(margin)[::-1]:
+            w = words[idx]
+            if len(w) >= 3 and w.isalpha():
+                picks.append(w)
+            if len(picks) >= n_per_channel:
+                break
+        result[ch] = picks or fallback[ch]
+    return result
+
+
 # ─── 전체 파이프라인 ──────────────────────────────────────────────────────────
 
 def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0,
@@ -438,6 +524,7 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0,
     tokenizer, bert_model = load_bert()
     mean_vec, A_R, A_G, A_B = load_anchors()
     eagleman = load_eagleman()
+    nrc_words = load_nrc_words()
 
     mlp_path = DATA_DIR / "mlp_weights.pt"
     if mlp_path.exists():
@@ -458,6 +545,11 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0,
         r_out = blend(r_syn, r_uni, r_grapheme, beta, gamma)
         char_rgbs = apply_grain_to_word(word, r_out, eagleman, grain_amount)
 
+        # 색의 근거(실측/예측)와 지배 채널 확신도 — UI 배지에 사용
+        strengths = anchor_strengths(v_i, A_R, A_G, A_B)
+        source = color_source(word, nrc_words, eagleman)
+        confidence = round(color_confidence(strengths), 3)
+
         # np.rint: truncation 대신 반올림 (0~255 변환 시 시스템적 -0.5 편향 제거)
         results.append({
             "word":    word,
@@ -465,6 +557,8 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0,
             "rgb_uni": np.rint(r_uni).astype(int).tolist(),
             "rgb_out": np.rint(r_out).astype(int).tolist(),
             "char_rgbs": char_rgbs,
+            "source": source,
+            "confidence": confidence,
         })
 
     return results

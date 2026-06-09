@@ -1,0 +1,20 @@
+# synesthesia-nlp 실행 의존성
+# 설치: pip install -r requirements.txt
+# (버전은 개발·검증에 사용한 환경 기준 하한값)
+
+# 핵심 모델 — BERT 임베딩 추출 및 MLP 학습/추론
+torch>=2.2
+transformers>=5.0
+
+# 수치 연산 및 데이터 처리
+numpy>=1.26
+pandas>=2.0
+
+# 이미지 다운샘플링 / 픽셀 이미지 생성 (forward 2D, reverse 입력)
+pillow>=10.0
+
+# 3D 컬러 타워 시각화
+plotly>=5.20
+
+# 인터랙티브 웹 데모 UI (gr.on/trigger_mode, themes API 사용 → 5.x 이상 권장)
+gradio>=5.0

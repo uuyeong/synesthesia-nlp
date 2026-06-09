@@ -5,6 +5,7 @@ app.py — Gradio 인터랙티브 웹 데모
 탭 구성:
     탭 1 — 정방향: 텍스트 → 색상 바 + 2D 이미지 + 3D 타워
     탭 2 — 역방향: 이미지 → 구조적 시
+    탭 3 — 순환 실험: 텍스트 → 정방향 → 색상 이미지 → 역방향 → 새로운 시
 
 실행:
     python src/app.py
@@ -12,11 +13,17 @@ app.py — Gradio 인터랙티브 웹 데모
 
 import html
 import math
+import os
+import tempfile
 import gradio as gr
 from PIL import Image
-from forward_pipeline import reblend_forward_results, run_forward
+from forward_pipeline import (
+    reblend_forward_results, run_forward, recommend_vivid_words,
+)
 from reverse_pipeline import run_reverse_with_details
-from visualizer import make_color_bar, make_2d_image, make_3d_tower
+from visualizer import (
+    make_color_bar, make_2d_image, make_3d_tower, make_word_info_panel,
+)
 
 
 APP_THEME = gr.themes.Monochrome()
@@ -355,6 +362,29 @@ html, body, .gradio-container {
         justify-content: center !important;
     }
 }
+
+/* Gradio 내부 CSS 변수 직접 덮어쓰기 — 버전별 svelte 해시 클래스에 무관하게
+   모든 블록 라벨을 흰색으로 고정한다. */
+.gradio-container,
+.gradio-container * {
+    --block-label-text-color: #f4f4f4 !important;
+    --block-label-background-fill: transparent !important;
+}
+
+/* 선택자 기반 보강 — 위 변수가 적용 안 되는 경우를 위한 이중 대응 */
+.gradio-container label,
+.gradio-container label span,
+.gradio-container .block-label,
+.gradio-container .block-label *,
+.gradio-container .label-wrap,
+.gradio-container .label-wrap *,
+.gradio-container fieldset > legend,
+.gradio-container fieldset > legend *,
+.gradio-container [class*="block"] > [class*="label"],
+.gradio-container [class*="block"] > [class*="label"] * {
+    color: #f4f4f4 !important;
+    -webkit-text-fill-color: #f4f4f4 !important;
+}
 """
 
 
@@ -365,7 +395,8 @@ def render_forward_outputs(word_colors: list[dict], image_unit: str) -> tuple:
     color_bar = make_color_bar(word_colors)
     img_2d = make_2d_image(word_colors, unit=image_unit)
     fig_3d = make_3d_tower(word_colors)
-    return color_bar, img_2d, fig_3d
+    info_panel = make_word_info_panel(word_colors)
+    return color_bar, img_2d, fig_3d, info_panel
 
 
 def forward_tab_handler(text: str, beta: float, gamma: float,
@@ -373,8 +404,8 @@ def forward_tab_handler(text: str, beta: float, gamma: float,
     """Gradio 탭 1 이벤트 핸들러 — 텍스트를 시각화 결과로 변환한다."""
 
     word_colors = run_forward(text, beta, gamma, grain_amount)
-    color_bar, img_2d, fig_3d = render_forward_outputs(word_colors, image_unit)
-    return word_colors, color_bar, img_2d, fig_3d
+    color_bar, img_2d, fig_3d, info_panel = render_forward_outputs(word_colors, image_unit)
+    return word_colors, color_bar, img_2d, fig_3d, info_panel
 
 
 def refresh_forward_outputs(word_colors: list[dict], beta: float, gamma: float,
@@ -427,7 +458,8 @@ def make_reverse_mapping_table(mapping_rows: list[dict]) -> str:
     )
 
 
-def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) -> tuple:
+def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float,
+                        coherence: float) -> tuple:
     """Gradio 탭 2 이벤트 핸들러 — 이미지를 구조적 시로 변환한다."""
 
     if image is None:
@@ -443,7 +475,7 @@ def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) 
         alpha = 0.0
 
     # 3. 역방향 파이프라인 실행 및 색상-단어 매핑 결과 획득
-    details = run_reverse_with_details(image, resolution, keyword, alpha)
+    details = run_reverse_with_details(image, resolution, keyword, alpha, coherence)
     poem_grid = details["word_grid"]
 
     # 4. 2차원 행렬을 "단어 단어 단어\n단어 단어 단어\n..." 형태의 텍스트로 결합
@@ -456,13 +488,61 @@ def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) 
     return simplified_image, "\n".join(lines), mapping_table
 
 
+# ─── 탭 3: 순환 실험 ──────────────────────────────────────────────────────────
+
+def cycle_tab_handler(text: str, beta: float, gamma: float,
+                      resolution_str: str, coherence: float = 0.0) -> tuple:
+    """Gradio 탭 3 이벤트 핸들러 — 텍스트를 한 번에 정방향→역방향으로 순환시킨다.
+
+    흐름: 텍스트 → run_forward → 단어별 색상 2D 이미지 → (임시 파일) →
+          run_reverse → 새로운 구조적 시. 원본 텍스트와 순환 결과를 나란히 비교한다.
+    """
+    if not text or not text.strip():
+        return None, "", "텍스트를 먼저 입력한 뒤 순환을 실행해 주세요."
+
+    # 1. 정방향: 텍스트 → 단어별 색상. 순환에서는 단어=픽셀 1개가 직관적이라
+    #    grain은 사용하지 않고 단어 단위 2D 이미지를 색상 이미지로 쓴다.
+    word_colors = run_forward(text, beta, gamma, grain_amount=0.0)
+    color_image = make_2d_image(word_colors, unit="word")
+
+    # 2. 정방향 색상 이미지를 임시 파일로 저장 → 역방향 입력 경로로 전달.
+    #    run_reverse는 파일 경로를 받으므로 메모리 이미지를 잠깐 디스크에 내린다.
+    H, W = (int(part) for part in resolution_str.split("×"))
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp_path = tmp.name
+        color_image.save(tmp_path)
+
+        # 3. 역방향: 색상 이미지 → 새로운 시 (키워드 없이 순수 색상 기반).
+        details = run_reverse_with_details(tmp_path, (H, W), None, 0.0, coherence)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    new_poem = "\n".join(" ".join(row) for row in details["word_grid"])
+    return color_image, text.strip(), new_poem
+
+
 # ─── Gradio UI 구성 ───────────────────────────────────────────────────────────
 
+def _make_word_appender(word: str):
+    """추천 단어 칩 클릭 시 입력 텍스트 끝에 단어를 덧붙이는 핸들러를 만든다."""
+    def _append(current: str) -> str:
+        current = current or ""
+        sep = "" if (not current or current[-1:] in " \n") else " "
+        return current + sep + word
+    return _append
+
+
 def build_ui():
+    # 모델이 색이 뚜렷하다고 보는 추천 단어 (캐시 없으면 큐레이션 폴백) — 1회 계산.
+    recommendations = recommend_vivid_words(n_per_channel=6)
+
     # 다크 모드가 전시에 더 몰입감을 줄 수 있어 theme을 약간 어둡게 튜닝하는 것도 좋습니다.
     with gr.Blocks(title="Synesthetic AI", theme=APP_THEME, css=APP_CSS) as demo:
-        gr.Markdown("<h1 style='text-align: center;'>🧠 공감각 AI (Synesthetic AI)</h1>")
-        gr.Markdown("<p style='text-align: center;'>기계의 눈으로 읽고, 시의 언어로 그리는 공감각 예술</p>")
+        gr.Markdown("<h1 style='text-align: center;'>Synesthetic AI</h1>")
+        gr.Markdown("<p style='text-align: center;'>단어에서 색으로, 색에서 시로 — 공감각자의 세계를 AI로 탐구하다</p>")
 
         # ─── 탭 1: 정방향 ───────────────────────────────────────────────────
         with gr.Tab("정방향: 텍스트 → 시각화"):
@@ -481,8 +561,20 @@ def build_ui():
 
                     # 버튼들을 나란히 배치
                     with gr.Row():
-                        run_btn = gr.Button("🎨 시각화 생성", variant="primary", elem_id="generate-btn")
+                        run_btn = gr.Button("시각화 생성", variant="primary", elem_id="generate-btn")
                         #immersive_btn = gr.Button("🚀 3D 전체화면", variant="secondary")
+
+                    # 모델이 가장 색이 뚜렷하다고 본 단어 추천 — 클릭 시 입력에 추가
+                    with gr.Accordion("🎨 색이 뚜렷한 단어 추천 (클릭하면 입력에 추가)", open=False):
+                        for ch, ch_label in [("R", "🔴 붉은 계열"),
+                                             ("G", "🟢 초록 계열"),
+                                             ("B", "🔵 푸른 계열")]:
+                            gr.Markdown(f"**{ch_label}**")
+                            with gr.Row():
+                                for rec_word in recommendations.get(ch, []):
+                                    chip = gr.Button(rec_word, size="sm")
+                                    chip.click(_make_word_appender(rec_word),
+                                               inputs=[text_input], outputs=[text_input])
 
                 # 우측 (Scale=2): 결과물 중심의 넓은 캔버스
                 with gr.Column(scale=2):
@@ -496,20 +588,23 @@ def build_ui():
                         elem_id="image-unit-toggle",
                     )
                     img_2d_out = gr.Image(label="2D 픽셀 이미지")
-                    fig_3d_out = gr.Plot(label="3D 컬러 타워 (미리보기)")
+                    fig_3d_out = gr.Plot(label="3D 컬러 타워")
+
+                    gr.Markdown("### 단어별 색 정보 — 실측/예측 · 색 확신도")
+                    word_info_out = gr.HTML()
 
             # 이벤트 연결
             #run_btn.click(forward_tab_handler, inputs=[text_input, beta_slider, gamma_slider, ncols_slider], outputs=[color_bar_out, img_2d_out, fig_3d_out])
             run_btn.click(
                 forward_tab_handler,
                 inputs=[text_input, beta_slider, gamma_slider, grain_slider, image_unit],
-                outputs=[forward_state, color_bar_out, img_2d_out, fig_3d_out],
+                outputs=[forward_state, color_bar_out, img_2d_out, fig_3d_out, word_info_out],
             )
             gr.on(
                 triggers=[beta_slider.input, gamma_slider.input],
                 fn=refresh_forward_outputs,
                 inputs=[forward_state, beta_slider, gamma_slider, grain_slider, image_unit],
-                outputs=[color_bar_out, img_2d_out, fig_3d_out],
+                outputs=[color_bar_out, img_2d_out, fig_3d_out, word_info_out],
                 trigger_mode="always_last",
             )
             gr.on(
@@ -532,6 +627,8 @@ def build_ui():
                         resolution_dropdown = gr.Dropdown(["8×8", "10×10", "16×16", "32×32"], value="10×10", label="추상화 해상도", elem_id="resolution-dropdown")
                         keyword_input = gr.Textbox(label="심상 키워드 (선택)")
                         alpha_slider = gr.Slider(0.0, 1.0, value=0.5, label="α (순수 색상 ←→ 키워드 문맥)")
+                        coherence_slider = gr.Slider(0.0, 1.0, value=0.0, step=0.01,
+                                                     label="일관성 (날것 ←→ 결속된 시)")
 
                     reverse_btn = gr.Button("✍️ 공감각적 시 생성", variant="primary", elem_id="reverse-generate-btn")
 
@@ -545,8 +642,53 @@ def build_ui():
             # 이벤트 연결
             reverse_btn.click(
                 reverse_tab_handler,
-                inputs=[image_input, resolution_dropdown, keyword_input, alpha_slider],
+                inputs=[image_input, resolution_dropdown, keyword_input, alpha_slider,
+                        coherence_slider],
                 outputs=[simplified_image_out, poem_out, mapping_table_out],
+            )
+
+        # ─── 탭 3: 순환 실험 ────────────────────────────────────────────────
+        with gr.Tab("순환 실험: 텍스트 → 색 → 시"):
+            gr.Markdown(
+                "텍스트를 색으로 바꾸고(정방향), 그 색을 다시 시로 되돌립니다(역방향). "
+                "원본과 순환 결과를 나란히 비교해 모델이 의미↔색을 얼마나 잘 번역하는지 봅니다."
+            )
+            with gr.Row():
+                # 좌측 (Scale=1): 입력 및 제어
+                with gr.Column(scale=1, min_width=280):
+                    cycle_text_input = gr.Textbox(
+                        label="원본 텍스트 (시, 문장 등)", lines=8,
+                        placeholder="순환시킬 텍스트를 입력하세요...",
+                    )
+                    with gr.Accordion("⚙️ 순환 옵션", open=True):
+                        cycle_beta = gr.Slider(0.0, 1.0, value=0.5, step=0.01,
+                                               label="색 모델 (Cosine ←→ MLP)")
+                        cycle_gamma = gr.Slider(0.0, 1.0, value=0.0, step=0.01,
+                                                label="첫 글자 색 끌림")
+                        cycle_resolution = gr.Dropdown(
+                            ["8×8", "10×10", "16×16", "32×32"], value="10×10",
+                            label="역방향 추상화 해상도", elem_id="resolution-dropdown",
+                        )
+                        cycle_coherence = gr.Slider(0.0, 1.0, value=0.0, step=0.01,
+                                                    label="역방향 일관성 (날것 ←→ 결속된 시)")
+                    cycle_btn = gr.Button("🔄 순환 실행", variant="primary",
+                                          elem_id="generate-btn")
+
+                # 우측 (Scale=2): 원본 시 | 색상 이미지 | 생성된 시 3단 비교
+                with gr.Column(scale=2):
+                    with gr.Row():
+                        cycle_original_out = gr.Textbox(
+                            label="① 원본 시", lines=18, interactive=False)
+                        cycle_image_out = gr.Image(label="② 색상 이미지 (정방향)")
+                        cycle_new_poem_out = gr.Textbox(
+                            label="③ 순환 후 생성된 시 (역방향)", lines=18,
+                            interactive=False)
+
+            cycle_btn.click(
+                cycle_tab_handler,
+                inputs=[cycle_text_input, cycle_beta, cycle_gamma, cycle_resolution,
+                        cycle_coherence],
+                outputs=[cycle_image_out, cycle_original_out, cycle_new_poem_out],
             )
 
     return demo
