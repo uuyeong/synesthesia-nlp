@@ -458,7 +458,8 @@ def make_reverse_mapping_table(mapping_rows: list[dict]) -> str:
     )
 
 
-def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) -> tuple:
+def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float,
+                        coherence: float) -> tuple:
     """Gradio 탭 2 이벤트 핸들러 — 이미지를 구조적 시로 변환한다."""
 
     if image is None:
@@ -474,7 +475,7 @@ def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) 
         alpha = 0.0
 
     # 3. 역방향 파이프라인 실행 및 색상-단어 매핑 결과 획득
-    details = run_reverse_with_details(image, resolution, keyword, alpha)
+    details = run_reverse_with_details(image, resolution, keyword, alpha, coherence)
     poem_grid = details["word_grid"]
 
     # 4. 2차원 행렬을 "단어 단어 단어\n단어 단어 단어\n..." 형태의 텍스트로 결합
@@ -490,7 +491,7 @@ def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) 
 # ─── 탭 3: 순환 실험 ──────────────────────────────────────────────────────────
 
 def cycle_tab_handler(text: str, beta: float, gamma: float,
-                      resolution_str: str) -> tuple:
+                      resolution_str: str, coherence: float = 0.0) -> tuple:
     """Gradio 탭 3 이벤트 핸들러 — 텍스트를 한 번에 정방향→역방향으로 순환시킨다.
 
     흐름: 텍스트 → run_forward → 단어별 색상 2D 이미지 → (임시 파일) →
@@ -514,7 +515,7 @@ def cycle_tab_handler(text: str, beta: float, gamma: float,
         color_image.save(tmp_path)
 
         # 3. 역방향: 색상 이미지 → 새로운 시 (키워드 없이 순수 색상 기반).
-        details = run_reverse_with_details(tmp_path, (H, W), None, 0.0)
+        details = run_reverse_with_details(tmp_path, (H, W), None, 0.0, coherence)
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -626,6 +627,8 @@ def build_ui():
                         resolution_dropdown = gr.Dropdown(["8×8", "10×10", "16×16", "32×32"], value="10×10", label="추상화 해상도", elem_id="resolution-dropdown")
                         keyword_input = gr.Textbox(label="심상 키워드 (선택)")
                         alpha_slider = gr.Slider(0.0, 1.0, value=0.5, label="α (순수 색상 ←→ 키워드 문맥)")
+                        coherence_slider = gr.Slider(0.0, 1.0, value=0.0, step=0.01,
+                                                     label="일관성 (날것 ←→ 결속된 시)")
 
                     reverse_btn = gr.Button("✍️ 공감각적 시 생성", variant="primary", elem_id="reverse-generate-btn")
 
@@ -639,7 +642,8 @@ def build_ui():
             # 이벤트 연결
             reverse_btn.click(
                 reverse_tab_handler,
-                inputs=[image_input, resolution_dropdown, keyword_input, alpha_slider],
+                inputs=[image_input, resolution_dropdown, keyword_input, alpha_slider,
+                        coherence_slider],
                 outputs=[simplified_image_out, poem_out, mapping_table_out],
             )
 
@@ -665,6 +669,8 @@ def build_ui():
                             ["8×8", "10×10", "16×16", "32×32"], value="10×10",
                             label="역방향 추상화 해상도", elem_id="resolution-dropdown",
                         )
+                        cycle_coherence = gr.Slider(0.0, 1.0, value=0.0, step=0.01,
+                                                    label="역방향 일관성 (날것 ←→ 결속된 시)")
                     cycle_btn = gr.Button("🔄 순환 실행", variant="primary",
                                           elem_id="generate-btn")
 
@@ -680,7 +686,8 @@ def build_ui():
 
             cycle_btn.click(
                 cycle_tab_handler,
-                inputs=[cycle_text_input, cycle_beta, cycle_gamma, cycle_resolution],
+                inputs=[cycle_text_input, cycle_beta, cycle_gamma, cycle_resolution,
+                        cycle_coherence],
                 outputs=[cycle_image_out, cycle_original_out, cycle_new_poem_out],
             )
 
