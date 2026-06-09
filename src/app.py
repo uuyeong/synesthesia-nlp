@@ -358,6 +358,29 @@ html, body, .gradio-container {
         justify-content: center !important;
     }
 }
+
+/* Gradio 내부 CSS 변수 직접 덮어쓰기 — 버전별 svelte 해시 클래스에 무관하게
+   모든 블록 라벨을 흰색으로 고정한다. */
+.gradio-container,
+.gradio-container * {
+    --block-label-text-color: #f4f4f4 !important;
+    --block-label-background-fill: transparent !important;
+}
+
+/* 선택자 기반 보강 — 위 변수가 적용 안 되는 경우를 위한 이중 대응 */
+.gradio-container label,
+.gradio-container label span,
+.gradio-container .block-label,
+.gradio-container .block-label *,
+.gradio-container .label-wrap,
+.gradio-container .label-wrap *,
+.gradio-container fieldset > legend,
+.gradio-container fieldset > legend *,
+.gradio-container [class*="block"] > [class*="label"],
+.gradio-container [class*="block"] > [class*="label"] * {
+    color: #f4f4f4 !important;
+    -webkit-text-fill-color: #f4f4f4 !important;
+}
 """
 
 
@@ -501,7 +524,7 @@ def build_ui():
     # 다크 모드가 전시에 더 몰입감을 줄 수 있어 theme을 약간 어둡게 튜닝하는 것도 좋습니다.
     with gr.Blocks(title="Synesthetic AI", theme=APP_THEME, css=APP_CSS) as demo:
         gr.Markdown("<h1 style='text-align: center;'>Synesthetic AI</h1>")
-        gr.Markdown("<p style='text-align: center;'>기계의 눈으로 읽고, 시의 언어로 그리는 공감각 예술</p>")
+        gr.Markdown("<p style='text-align: center;'>단어에서 색으로, 색에서 시로 — 공감각자의 세계를 AI로 탐구하다</p>")
 
         # ─── 탭 1: 정방향 ───────────────────────────────────────────────────
         with gr.Tab("정방향: 텍스트 → 시각화"):
@@ -535,7 +558,7 @@ def build_ui():
                         elem_id="image-unit-toggle",
                     )
                     img_2d_out = gr.Image(label="2D 픽셀 이미지")
-                    fig_3d_out = gr.Plot(label="3D 컬러 타워 (미리보기)")
+                    fig_3d_out = gr.Plot(label="3D 컬러 타워")
 
             # 이벤트 연결
             #run_btn.click(forward_tab_handler, inputs=[text_input, beta_slider, gamma_slider, ncols_slider], outputs=[color_bar_out, img_2d_out, fig_3d_out])
