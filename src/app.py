@@ -5,6 +5,7 @@ app.py — Gradio 인터랙티브 웹 데모
 탭 구성:
     탭 1 — 정방향: 텍스트 → 색상 바 + 2D 이미지 + 3D 타워
     탭 2 — 역방향: 이미지 → 구조적 시
+    탭 3 — 순환 실험: 텍스트 → 정방향 → 색상 이미지 → 역방향 → 새로운 시
 
 실행:
     python src/app.py
@@ -12,6 +13,8 @@ app.py — Gradio 인터랙티브 웹 데모
 
 import html
 import math
+import os
+import tempfile
 import gradio as gr
 from PIL import Image
 from forward_pipeline import reblend_forward_results, run_forward
@@ -456,6 +459,42 @@ def reverse_tab_handler(image, resolution_str: str, keyword: str, alpha: float) 
     return simplified_image, "\n".join(lines), mapping_table
 
 
+# ─── 탭 3: 순환 실험 ──────────────────────────────────────────────────────────
+
+def cycle_tab_handler(text: str, beta: float, gamma: float,
+                      resolution_str: str) -> tuple:
+    """Gradio 탭 3 이벤트 핸들러 — 텍스트를 한 번에 정방향→역방향으로 순환시킨다.
+
+    흐름: 텍스트 → run_forward → 단어별 색상 2D 이미지 → (임시 파일) →
+          run_reverse → 새로운 구조적 시. 원본 텍스트와 순환 결과를 나란히 비교한다.
+    """
+    if not text or not text.strip():
+        return None, "", "텍스트를 먼저 입력한 뒤 순환을 실행해 주세요."
+
+    # 1. 정방향: 텍스트 → 단어별 색상. 순환에서는 단어=픽셀 1개가 직관적이라
+    #    grain은 사용하지 않고 단어 단위 2D 이미지를 색상 이미지로 쓴다.
+    word_colors = run_forward(text, beta, gamma, grain_amount=0.0)
+    color_image = make_2d_image(word_colors, unit="word")
+
+    # 2. 정방향 색상 이미지를 임시 파일로 저장 → 역방향 입력 경로로 전달.
+    #    run_reverse는 파일 경로를 받으므로 메모리 이미지를 잠깐 디스크에 내린다.
+    H, W = (int(part) for part in resolution_str.split("×"))
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp_path = tmp.name
+        color_image.save(tmp_path)
+
+        # 3. 역방향: 색상 이미지 → 새로운 시 (키워드 없이 순수 색상 기반).
+        details = run_reverse_with_details(tmp_path, (H, W), None, 0.0)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    new_poem = "\n".join(" ".join(row) for row in details["word_grid"])
+    return color_image, text.strip(), new_poem
+
+
 # ─── Gradio UI 구성 ───────────────────────────────────────────────────────────
 
 def build_ui():
@@ -547,6 +586,47 @@ def build_ui():
                 reverse_tab_handler,
                 inputs=[image_input, resolution_dropdown, keyword_input, alpha_slider],
                 outputs=[simplified_image_out, poem_out, mapping_table_out],
+            )
+
+        # ─── 탭 3: 순환 실험 ────────────────────────────────────────────────
+        with gr.Tab("순환 실험: 텍스트 → 색 → 시"):
+            gr.Markdown(
+                "텍스트를 색으로 바꾸고(정방향), 그 색을 다시 시로 되돌립니다(역방향). "
+                "원본과 순환 결과를 나란히 비교해 모델이 의미↔색을 얼마나 잘 번역하는지 봅니다."
+            )
+            with gr.Row():
+                # 좌측 (Scale=1): 입력 및 제어
+                with gr.Column(scale=1, min_width=280):
+                    cycle_text_input = gr.Textbox(
+                        label="원본 텍스트 (시, 문장 등)", lines=8,
+                        placeholder="순환시킬 텍스트를 입력하세요...",
+                    )
+                    with gr.Accordion("⚙️ 순환 옵션", open=True):
+                        cycle_beta = gr.Slider(0.0, 1.0, value=0.5, step=0.01,
+                                               label="색 모델 (Cosine ←→ MLP)")
+                        cycle_gamma = gr.Slider(0.0, 1.0, value=0.0, step=0.01,
+                                                label="첫 글자 색 끌림")
+                        cycle_resolution = gr.Dropdown(
+                            ["8×8", "10×10", "16×16", "32×32"], value="10×10",
+                            label="역방향 추상화 해상도", elem_id="resolution-dropdown",
+                        )
+                    cycle_btn = gr.Button("🔄 순환 실행", variant="primary",
+                                          elem_id="generate-btn")
+
+                # 우측 (Scale=2): 원본 시 | 색상 이미지 | 생성된 시 3단 비교
+                with gr.Column(scale=2):
+                    with gr.Row():
+                        cycle_original_out = gr.Textbox(
+                            label="① 원본 시", lines=18, interactive=False)
+                        cycle_image_out = gr.Image(label="② 색상 이미지 (정방향)")
+                        cycle_new_poem_out = gr.Textbox(
+                            label="③ 순환 후 생성된 시 (역방향)", lines=18,
+                            interactive=False)
+
+            cycle_btn.click(
+                cycle_tab_handler,
+                inputs=[cycle_text_input, cycle_beta, cycle_gamma, cycle_resolution],
+                outputs=[cycle_image_out, cycle_original_out, cycle_new_poem_out],
             )
 
     return demo
