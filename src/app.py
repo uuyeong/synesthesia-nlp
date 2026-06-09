@@ -17,9 +17,13 @@ import os
 import tempfile
 import gradio as gr
 from PIL import Image
-from forward_pipeline import reblend_forward_results, run_forward
+from forward_pipeline import (
+    reblend_forward_results, run_forward, recommend_vivid_words,
+)
 from reverse_pipeline import run_reverse_with_details
-from visualizer import make_color_bar, make_2d_image, make_3d_tower
+from visualizer import (
+    make_color_bar, make_2d_image, make_3d_tower, make_word_info_panel,
+)
 
 
 APP_THEME = gr.themes.Monochrome()
@@ -391,7 +395,8 @@ def render_forward_outputs(word_colors: list[dict], image_unit: str) -> tuple:
     color_bar = make_color_bar(word_colors)
     img_2d = make_2d_image(word_colors, unit=image_unit)
     fig_3d = make_3d_tower(word_colors)
-    return color_bar, img_2d, fig_3d
+    info_panel = make_word_info_panel(word_colors)
+    return color_bar, img_2d, fig_3d, info_panel
 
 
 def forward_tab_handler(text: str, beta: float, gamma: float,
@@ -399,8 +404,8 @@ def forward_tab_handler(text: str, beta: float, gamma: float,
     """Gradio 탭 1 이벤트 핸들러 — 텍스트를 시각화 결과로 변환한다."""
 
     word_colors = run_forward(text, beta, gamma, grain_amount)
-    color_bar, img_2d, fig_3d = render_forward_outputs(word_colors, image_unit)
-    return word_colors, color_bar, img_2d, fig_3d
+    color_bar, img_2d, fig_3d, info_panel = render_forward_outputs(word_colors, image_unit)
+    return word_colors, color_bar, img_2d, fig_3d, info_panel
 
 
 def refresh_forward_outputs(word_colors: list[dict], beta: float, gamma: float,
@@ -520,7 +525,19 @@ def cycle_tab_handler(text: str, beta: float, gamma: float,
 
 # ─── Gradio UI 구성 ───────────────────────────────────────────────────────────
 
+def _make_word_appender(word: str):
+    """추천 단어 칩 클릭 시 입력 텍스트 끝에 단어를 덧붙이는 핸들러를 만든다."""
+    def _append(current: str) -> str:
+        current = current or ""
+        sep = "" if (not current or current[-1:] in " \n") else " "
+        return current + sep + word
+    return _append
+
+
 def build_ui():
+    # 모델이 색이 뚜렷하다고 보는 추천 단어 (캐시 없으면 큐레이션 폴백) — 1회 계산.
+    recommendations = recommend_vivid_words(n_per_channel=6)
+
     # 다크 모드가 전시에 더 몰입감을 줄 수 있어 theme을 약간 어둡게 튜닝하는 것도 좋습니다.
     with gr.Blocks(title="Synesthetic AI", theme=APP_THEME, css=APP_CSS) as demo:
         gr.Markdown("<h1 style='text-align: center;'>Synesthetic AI</h1>")
@@ -546,6 +563,18 @@ def build_ui():
                         run_btn = gr.Button("시각화 생성", variant="primary", elem_id="generate-btn")
                         #immersive_btn = gr.Button("🚀 3D 전체화면", variant="secondary")
 
+                    # 모델이 가장 색이 뚜렷하다고 본 단어 추천 — 클릭 시 입력에 추가
+                    with gr.Accordion("🎨 색이 뚜렷한 단어 추천 (클릭하면 입력에 추가)", open=False):
+                        for ch, ch_label in [("R", "🔴 붉은 계열"),
+                                             ("G", "🟢 초록 계열"),
+                                             ("B", "🔵 푸른 계열")]:
+                            gr.Markdown(f"**{ch_label}**")
+                            with gr.Row():
+                                for rec_word in recommendations.get(ch, []):
+                                    chip = gr.Button(rec_word, size="sm")
+                                    chip.click(_make_word_appender(rec_word),
+                                               inputs=[text_input], outputs=[text_input])
+
                 # 우측 (Scale=2): 결과물 중심의 넓은 캔버스
                 with gr.Column(scale=2):
                     color_bar_out = gr.Image(label="전체 색상 흐름 (Color Bar)", height=120)
@@ -560,18 +589,21 @@ def build_ui():
                     img_2d_out = gr.Image(label="2D 픽셀 이미지")
                     fig_3d_out = gr.Plot(label="3D 컬러 타워")
 
+                    gr.Markdown("### 단어별 색 정보 — 실측/예측 · 색 확신도")
+                    word_info_out = gr.HTML()
+
             # 이벤트 연결
             #run_btn.click(forward_tab_handler, inputs=[text_input, beta_slider, gamma_slider, ncols_slider], outputs=[color_bar_out, img_2d_out, fig_3d_out])
             run_btn.click(
                 forward_tab_handler,
                 inputs=[text_input, beta_slider, gamma_slider, grain_slider, image_unit],
-                outputs=[forward_state, color_bar_out, img_2d_out, fig_3d_out],
+                outputs=[forward_state, color_bar_out, img_2d_out, fig_3d_out, word_info_out],
             )
             gr.on(
                 triggers=[beta_slider.input, gamma_slider.input],
                 fn=refresh_forward_outputs,
                 inputs=[forward_state, beta_slider, gamma_slider, grain_slider, image_unit],
-                outputs=[color_bar_out, img_2d_out, fig_3d_out],
+                outputs=[color_bar_out, img_2d_out, fig_3d_out, word_info_out],
                 trigger_mode="always_last",
             )
             gr.on(

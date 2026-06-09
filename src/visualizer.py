@@ -8,9 +8,59 @@ visualizer.py — 2D 픽셀 이미지 및 3D 색상 타워 시각화
     - 색상 바: 단어별 색상을 수평으로 나열한 HTML/이미지 스트립
 """
 
+import html
 import numpy as np
 from PIL import Image
 import plotly.graph_objects as go
+
+
+# ─── 단어별 색 정보 패널 ──────────────────────────────────────────────────────
+
+def make_word_info_panel(word_colors: list[dict]) -> str:
+    """단어별 색 출처(실측/예측) 배지와 확신도 막대를 담은 HTML 패널을 만든다."""
+    if not word_colors:
+        return ("<div style='color:#c6c6c6;padding:12px;'>"
+                "시각화를 생성하면 단어별 색 정보가 여기에 표시됩니다.</div>")
+
+    rows = []
+    for item in word_colors:
+        word = html.escape(str(item.get("word", "")))
+        r, g, b = (item.get("rgb_out", [128, 128, 128]) + [128, 128, 128])[:3]
+        source = item.get("source", "예측")
+        conf = float(item.get("confidence", 0.0))
+
+        if source == "예측":
+            badge_bg, badge_text, label = "#3a3a3a", "#d8d8d8", "예측"
+        else:  # Eagleman / NRC = 인간 실측
+            badge_bg, badge_text, label = "#1f3d2a", "#7ee0a1", f"실측·{source}"
+
+        conf_pct = int(round(conf * 100))
+        rows.append(
+            "<tr>"
+            f"<td><span style='display:inline-block;width:20px;height:20px;border:1px solid #777;"
+            f"border-radius:4px;background:rgb({r},{g},{b});vertical-align:middle;'></span></td>"
+            f"<td style='padding:6px 10px;color:#f4f4f4;'>{word}</td>"
+            f"<td style='padding:6px 10px;'><span style='background:{badge_bg};color:{badge_text};"
+            f"padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap;'>{label}</span></td>"
+            f"<td style='padding:6px 10px;width:140px;'>"
+            f"<div style='background:#2a2a2a;border-radius:6px;height:8px;overflow:hidden;'>"
+            f"<div style='background:#9fcaff;height:8px;width:{conf_pct}%;'></div></div></td>"
+            f"<td style='padding:6px 8px;color:#c6c6c6;font-size:12px;'>{conf_pct}%</td>"
+            "</tr>"
+        )
+
+    return (
+        "<div style='max-height:360px;overflow-y:auto;border:1px solid #4a4a4a;"
+        "border-radius:6px;background:#191919;'>"
+        "<table style='width:100%;border-collapse:collapse;'>"
+        "<thead><tr style='position:sticky;top:0;background:#222;'>"
+        "<th style='padding:8px 10px;color:#f4f4f4;text-align:left;'>색</th>"
+        "<th style='padding:8px 10px;color:#f4f4f4;text-align:left;'>단어</th>"
+        "<th style='padding:8px 10px;color:#f4f4f4;text-align:left;'>출처</th>"
+        "<th style='padding:8px 10px;color:#f4f4f4;text-align:left;'>색 확신도</th>"
+        "<th></th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
 
 
 
