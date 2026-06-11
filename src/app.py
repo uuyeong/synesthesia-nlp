@@ -22,7 +22,8 @@ from forward_pipeline import (
 )
 from reverse_pipeline import run_reverse_with_details
 from visualizer import (
-    make_color_bar, make_2d_image, make_3d_tower, make_word_info_panel,
+    make_color_bar, make_2d_image, make_3d_tower, make_semantic_space,
+    make_word_info_panel,
 )
 
 
@@ -59,6 +60,12 @@ html, body, .gradio-container {
     margin: 0 !important;
     padding: 24px 32px !important;
     box-sizing: border-box !important;
+}
+
+.gradio-container > main {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
 }
 
 .gradio-container * {
@@ -341,8 +348,80 @@ html, body, .gradio-container {
     image-rendering: pixelated;
 }
 
+/* ─────────────────────────────────────────────
+   정방향 입력 영역
+───────────────────────────────────────────── */
+
+#forward-input-row {
+    align-items: stretch !important;
+    gap: 18px !important;
+}
+
+#forward-input-row > div {
+    min-width: 260px;
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+/* 텍스트 입력 / 슬라이더 / 추천단어
+   세 영역 높이 통일 */
+#forward-input-row > div > .block {
+    height: 100% !important;
+}
+
+/* ─────────────────────────────────────────────
+   추천 단어 패널
+───────────────────────────────────────────── */
+
+#forward-recommendations {
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    padding: 14px !important;
+    background: var(--surface-1) !important;
+
+    min-height: 420px !important;
+    max-height: 420px !important;
+
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+}
+
+#forward-recommendations button {
+    width: 100% !important;
+    min-width: 0 !important;
+    margin-bottom: 6px !important;
+}
+
+
+
+/* 추천 단어 제목 여백 */
+#forward-recommendations h3 {
+    margin-top: 0 !important;
+    margin-bottom: 12px !important;
+}
+
+/* 색상 그룹 제목 */
+#forward-recommendations p {
+    margin-bottom: 6px !important;
+}
+
+
+
+/* 버튼 hover */
+#forward-recommendations button:hover {
+    transform: translateY(-1px);
+}
+
+#semantic-space {
+    min-height: 560px;
+}
+
+#forward-results {
+    gap: 22px !important;
+}
+
 @media (max-width: 900px) {
-    .gradio-container {
+    .gradio-container.gradio-container {
         padding: 16px 14px !important;
     }
 
@@ -351,6 +430,12 @@ html, body, .gradio-container {
         gap: 18px !important;
     }
 
+    #forward-input-row {
+        flex-direction: column !important;
+        gap: 18px !important;
+    }
+
+    #forward-input-row > div,
     #reverse-layout > div {
         min-width: 100% !important;
         width: 100% !important;
@@ -391,12 +476,13 @@ html, body, .gradio-container {
 # ─── 탭 1: 정방향 ─────────────────────────────────────────────────────────────
 
 def render_forward_outputs(word_colors: list[dict], image_unit: str) -> tuple:
-    """Render the forward outputs, keeping color bar and 3D at word level."""
+    """Render semantic, color-flow, image, tower, and word-list outputs."""
+    semantic_space = make_semantic_space(word_colors)
     color_bar = make_color_bar(word_colors)
     img_2d = make_2d_image(word_colors, unit=image_unit)
     fig_3d = make_3d_tower(word_colors)
     info_panel = make_word_info_panel(word_colors)
-    return color_bar, img_2d, fig_3d, info_panel
+    return semantic_space, color_bar, img_2d, fig_3d, info_panel
 
 
 def forward_tab_handler(text: str, beta: float, gamma: float,
@@ -404,8 +490,8 @@ def forward_tab_handler(text: str, beta: float, gamma: float,
     """Gradio 탭 1 이벤트 핸들러 — 텍스트를 시각화 결과로 변환한다."""
 
     word_colors = run_forward(text, beta, gamma, grain_amount)
-    color_bar, img_2d, fig_3d, info_panel = render_forward_outputs(word_colors, image_unit)
-    return word_colors, color_bar, img_2d, fig_3d, info_panel
+    outputs = render_forward_outputs(word_colors, image_unit)
+    return (word_colors, *outputs)
 
 
 def refresh_forward_outputs(word_colors: list[dict], beta: float, gamma: float,
@@ -540,9 +626,11 @@ def build_ui():
     recommendations = recommend_vivid_words(n_per_channel=6)
 
     # 다크 모드가 전시에 더 몰입감을 줄 수 있어 theme을 약간 어둡게 튜닝하는 것도 좋습니다.
-    with gr.Blocks(title="Synesthetic AI", theme=APP_THEME, css=APP_CSS) as demo:
+    with gr.Blocks(title="Synesthetic AI") as demo:
         gr.Markdown("<h1 style='text-align: center;'>Synesthetic AI</h1>")
         gr.Markdown("<p style='text-align: center;'>단어에서 색으로, 색에서 시로 — 공감각자의 세계를 AI로 탐구하다</p>")
+
+
 
         # ─── 탭 1: 정방향 ───────────────────────────────────────────────────
         with gr.Tab("정방향: 텍스트 → 시각화"):
@@ -589,6 +677,10 @@ def build_ui():
                     )
                     img_2d_out = gr.Image(label="2D 픽셀 이미지")
                     fig_3d_out = gr.Plot(label="3D 컬러 타워")
+                    semantic_space_out = gr.Plot(
+                    label="Semantic Space",
+                    elem_id="semantic-space",
+                    )
 
                     gr.Markdown("### 단어별 색 정보 — 실측/예측 · 색 확신도")
                     word_info_out = gr.HTML()
@@ -598,13 +690,19 @@ def build_ui():
             run_btn.click(
                 forward_tab_handler,
                 inputs=[text_input, beta_slider, gamma_slider, grain_slider, image_unit],
-                outputs=[forward_state, color_bar_out, img_2d_out, fig_3d_out, word_info_out],
+                outputs=[
+                    forward_state, semantic_space_out, color_bar_out,
+                    img_2d_out, fig_3d_out, word_info_out,
+                ],
             )
             gr.on(
                 triggers=[beta_slider.input, gamma_slider.input],
                 fn=refresh_forward_outputs,
                 inputs=[forward_state, beta_slider, gamma_slider, grain_slider, image_unit],
-                outputs=[color_bar_out, img_2d_out, fig_3d_out, word_info_out],
+                outputs=[
+                    semantic_space_out, color_bar_out, img_2d_out,
+                    fig_3d_out, word_info_out,
+                ],
                 trigger_mode="always_last",
             )
             gr.on(
@@ -614,8 +712,6 @@ def build_ui():
                 outputs=[img_2d_out],
                 trigger_mode="always_last",
             )
-            #immersive_btn.click(fn=None, inputs=None, outputs=None, js="() => { window.open('http://localhost:8000/tower_3d.html', '_blank'); }")
-            #text_input.change(fn=update_ncols_max, inputs=text_input, outputs=ncols_slider)
         # ─── 탭 2: 역방향 ───────────────────────────────────────────────────
         with gr.Tab("역방향: 이미지 → 시"):
             with gr.Row(elem_id="reverse-layout"):
@@ -697,4 +793,4 @@ def build_ui():
 if __name__ == "__main__":
     demo = build_ui()
     # share=True를 주면 외부 링크가 생성되어 교수님/팀원 시연에 편리합니다.
-    demo.launch(share=True)
+    demo.launch(share=True, theme=APP_THEME, css=APP_CSS)
