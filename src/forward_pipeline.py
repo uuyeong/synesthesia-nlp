@@ -23,6 +23,14 @@ import torch.nn as nn
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
+# poetry candidate corpus에서 측정한 fallback 통계.
+# candidate_vectors.npy가 있으면 아래 값 대신 현재 데이터에서 다시 계산한다.
+_COSINE_FALLBACK_MEAN = np.array([0.00715, 0.11583, 0.01582], dtype=np.float32)
+_COSINE_FALLBACK_STD = np.array([0.13300, 0.13167, 0.11933], dtype=np.float32)
+_COSINE_FALLBACK_BIAS = np.array([-0.0979, 0.2229, -0.1250], dtype=np.float32)
+_COSINE_TEMPERATURE = 2.0
+_COSINE_BRIGHTNESS_SCALE = 0.92
+
 
 # ─── MLP 모델 정의 ────────────────────────────────────────────────────────────
 
@@ -287,10 +295,88 @@ def rgb_syn(v_i: np.ndarray, mlp: SynesthesiaMLP) -> np.ndarray:
     return out.astype(np.float32)
 
 
+def _anchor_cosines(v_i: np.ndarray, anchors: tuple[np.ndarray, ...]) -> np.ndarray:
+    """Return raw cosine similarities to the supplied color anchors."""
+    norm_i = np.linalg.norm(v_i)
+    if norm_i < 1e-8:
+        return np.zeros(len(anchors), dtype=np.float32)
+    return np.array([
+        np.dot(v_i, anchor) / (norm_i * (np.linalg.norm(anchor) + 1e-8))
+        for anchor in anchors
+    ], dtype=np.float32)
+
+
+@cache
+def load_cosine_calibration() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Estimate channel calibration from the poetry candidate corpus.
+
+    Mean/std remove each anchor's corpus-wide baseline. The dominance bias is
+    then fitted so an ordinary corpus does not select one channel merely due
+    to the geometry of the BERT embedding space.
+    """
+    cache_path = DATA_DIR / "candidate_vectors.npy"
+    if not cache_path.exists():
+        return (
+            _COSINE_FALLBACK_MEAN.copy(),
+            _COSINE_FALLBACK_STD.copy(),
+            _COSINE_FALLBACK_BIAS.copy(),
+        )
+
+    try:
+        candidate_vectors = np.load(cache_path).astype(np.float32, copy=False)
+        if candidate_vectors.ndim != 2 or candidate_vectors.shape[1] != 768:
+            raise ValueError("candidate_vectors.npy shape mismatch")
+
+        _, A_R, A_G, A_B = load_anchors()
+        anchors = np.stack([A_R, A_G, A_B]).astype(np.float32)
+        normalized_vectors = candidate_vectors / (
+            np.linalg.norm(candidate_vectors, axis=1, keepdims=True) + 1e-8
+        )
+        normalized_anchors = anchors / (
+            np.linalg.norm(anchors, axis=1, keepdims=True) + 1e-8
+        )
+        similarities = normalized_vectors @ normalized_anchors.T
+        channel_mean = similarities.mean(axis=0)
+        channel_std = np.maximum(similarities.std(axis=0), 1e-6)
+        standardized = (similarities - channel_mean) / channel_std
+
+        dominance_bias = np.zeros(3, dtype=np.float32)
+        target_share = 1.0 / 3.0
+        for _ in range(200):
+            dominant = np.argmax(standardized - dominance_bias, axis=1)
+            shares = np.bincount(dominant, minlength=3) / len(dominant)
+            dominance_bias += 0.1 * (shares - target_share)
+        dominance_bias -= dominance_bias.mean()
+
+        return (
+            channel_mean.astype(np.float32),
+            channel_std.astype(np.float32),
+            dominance_bias.astype(np.float32),
+        )
+    except (OSError, ValueError):
+        return (
+            _COSINE_FALLBACK_MEAN.copy(),
+            _COSINE_FALLBACK_STD.copy(),
+            _COSINE_FALLBACK_BIAS.copy(),
+        )
+
+
+def calibrated_anchor_strengths(v_i: np.ndarray, A_R: np.ndarray,
+                                A_G: np.ndarray, A_B: np.ndarray) -> np.ndarray:
+    """Return corpus-calibrated R/G/B proportions whose sum is one."""
+    raw_cosines = _anchor_cosines(v_i, (A_R, A_G, A_B))
+    channel_mean, channel_std, dominance_bias = load_cosine_calibration()
+    scores = (raw_cosines - channel_mean) / channel_std - dominance_bias
+    logits = scores / _COSINE_TEMPERATURE
+    exp_scores = np.exp(logits - logits.max())
+    return exp_scores / (exp_scores.sum() + 1e-8)
+
+
 def rgb_uni(v_i: np.ndarray, A_R: np.ndarray, A_G: np.ndarray, A_B: np.ndarray) -> np.ndarray:
     """방법 2: Cosine Similarity 기반 RGB_uni를 계산한다.
 
-    cos(v_i, A_R/G/B) ∈ [-1, 1] → (cos+1)/2 ∈ [0,1] → ×255
+    코퍼스 기준으로 채널별 cosine 평균·분산과 지배 채널 편향을 보정한 뒤
+    softmax로 RGB 비중을 계산한다. 원래 cosine 평균은 전체 명도에만 사용한다.
 
     Args:
         v_i: Mean Centering 적용된 BERT 벡터 (768,)
@@ -299,40 +385,22 @@ def rgb_uni(v_i: np.ndarray, A_R: np.ndarray, A_G: np.ndarray, A_B: np.ndarray) 
     Returns:
         np.ndarray: RGB 값 (3,), 범위 0~255
     """
-    norm_i = np.linalg.norm(v_i) + 1e-8
+    if np.linalg.norm(v_i) < 1e-8:
+        return np.zeros(3, dtype=np.float32)
 
-    def cosine(anchor):
-        return np.dot(v_i, anchor) / (norm_i * (np.linalg.norm(anchor) + 1e-8))
+    raw_cosines = _anchor_cosines(v_i, (A_R, A_G, A_B))
+    color_shares = calibrated_anchor_strengths(v_i, A_R, A_G, A_B)
 
-    cos_r = (cosine(A_R)+1)/2
-    cos_g = (cosine(A_G)+1)/2
-    cos_b = (cosine(A_B)+1)/2
+    shifted_cosines = np.clip((raw_cosines + 1.0) / 2.0, 0.0, 1.0)
+    brightness = float(np.sqrt(shifted_cosines.mean()))
 
-    s_sum = cos_r + cos_g + cos_b
-
-    # 예외 처리: 모든 앵커와 유사도가 0이거나 음수인 경우 검은색 반환
-    if s_sum == 0.0:
-        return np.array([0, 0, 0], dtype=np.uint8)
-
-    # 3. 비중(Ratio) 계산 및 거듭제곱 (대비/채도 극대화)
-    r_ratio = (cos_r / s_sum) ** 2
-    g_ratio = (cos_g / s_sum) ** 2
-    b_ratio = (cos_b / s_sum) ** 2
-
-    # 4. 밝기(Brightness) 보정
-    # 유사도의 평균에 루트를 씌워 전반적인 명도를 잡아줍니다.
-    brightness = np.mean([cos_r, cos_g, cos_b]) ** 0.5
-
-    # 5. 최종 RGB 계산 (* 6 증폭)
-    # 6을 곱하는 것은 노출(Exposure)을 끌어올려 채도를 쨍하게 만드는 핵심 치트키 역할을 합니다.
-    r = int(r_ratio * brightness * 255 * 6)
-    g = int(g_ratio * brightness * 255 * 6)
-    b = int(b_ratio * brightness * 255 * 6)
-
-    # 6. 255를 넘는 값은 255로 제한(clipping)하고 numpy 배열로 반환
-    final_rgb = np.array([min(r, 255), min(g, 255), min(b, 255)], dtype=np.uint8)
-
-    return final_rgb
+    # 가장 강한 채널이 brightness를 결정하고 나머지는 softmax 비율을 유지한다.
+    normalized_color = color_shares / (color_shares.max() + 1e-8)
+    return np.clip(
+        normalized_color * brightness * 255.0 * _COSINE_BRIGHTNESS_SCALE,
+        0,
+        255,
+    ).astype(np.float32)
 
 
 
@@ -426,13 +494,8 @@ def reblend_forward_results(word_colors: list[dict], beta: float, gamma: float,
 
 def anchor_strengths(v_i: np.ndarray, A_R: np.ndarray, A_G: np.ndarray,
                      A_B: np.ndarray) -> np.ndarray:
-    """v_i 와 R/G/B 앵커의 정렬도 (cos+1)/2 ∈ [0,1] 3개를 반환한다."""
-    norm_i = np.linalg.norm(v_i) + 1e-8
-
-    def cos(anchor):
-        return float(np.dot(v_i, anchor) / (norm_i * (np.linalg.norm(anchor) + 1e-8)))
-
-    return np.array([(cos(A_R) + 1) / 2, (cos(A_G) + 1) / 2, (cos(A_B) + 1) / 2])
+    """UI 색상과 동일한 보정 기준의 R/G/B 비중 3개를 반환한다."""
+    return calibrated_anchor_strengths(v_i, A_R, A_G, A_B)
 
 
 def color_confidence(strengths: np.ndarray) -> float:
@@ -498,6 +561,42 @@ def recommend_vivid_words(n_per_channel: int = 6) -> dict:
     return result
 
 
+def _semantic_coordinates(words: list[str],
+                          vectors: list[np.ndarray]) -> dict[str, list[float]]:
+    """Project unique normalized word vectors into a three-dimensional PCA space."""
+    unique_words = []
+    unique_vectors = []
+    seen = set()
+
+    for word, vector in zip(words, vectors):
+        key = word.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_words.append(key)
+        unique_vectors.append(np.asarray(vector, dtype=np.float32))
+
+    if not unique_vectors:
+        return {}
+    if len(unique_vectors) == 1:
+        return {unique_words[0]: [0.0, 0.0, 0.0]}
+
+    matrix = np.stack(unique_vectors)
+    matrix /= np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-8
+    centered = matrix - matrix.mean(axis=0, keepdims=True)
+
+    _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    n_components = min(3, vh.shape[0])
+    coordinates = centered @ vh[:n_components].T
+    if n_components < 3:
+        coordinates = np.pad(coordinates, ((0, 0), (0, 3 - n_components)))
+
+    return {
+        word: np.round(coordinate[:3], 6).astype(float).tolist()
+        for word, coordinate in zip(unique_words, coordinates)
+    }
+
+
 # ─── 전체 파이프라인 ──────────────────────────────────────────────────────────
 
 def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0,
@@ -518,6 +617,7 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0,
                 "rgb_uni": [R,G,B],
                 "rgb_out": [R,G,B],
                 "char_rgbs": [[R,G,B], ...],
+                "semantic_xyz": [x,y,z],
             }, ...]
     """
     # load_* 함수들은 @cache 데코레이터로 1회만 실제 로드 → 매 호출 BERT 재로딩 비용 없음.
@@ -535,9 +635,11 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0,
 
     words = tokenize_text(text)
     results = []
+    word_vectors = []
 
     for word in words:
         v_i = get_bert_vector(word, tokenizer, bert_model, mean_vec)
+        word_vectors.append(v_i)
 
         r_uni = rgb_uni(v_i, A_R, A_G, A_B)
         r_syn = rgb_syn(v_i, mlp) if mlp is not None else r_uni.copy()
@@ -560,6 +662,12 @@ def run_forward(text: str, beta: float = 0.5, gamma: float = 0.0,
             "source": source,
             "confidence": confidence,
         })
+
+    semantic_positions = _semantic_coordinates(words, word_vectors)
+    for item in results:
+        item["semantic_xyz"] = semantic_positions.get(
+            item["word"].lower(), [0.0, 0.0, 0.0]
+        )
 
     return results
 

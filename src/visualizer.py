@@ -191,6 +191,145 @@ def make_color_bar(word_colors: list[dict]) -> Image.Image:
     return final_bar
 
 
+# ─── 3D 의미 공간 ─────────────────────────────────────────────────────────────
+
+def _empty_dark_figure(message: str) -> go.Figure:
+    """Return a dark Plotly placeholder that matches the application theme."""
+    fig = go.Figure()
+    fig.update_layout(
+        height=520,
+        margin=dict(l=0, r=0, b=0, t=8),
+        paper_bgcolor="#101010",
+        plot_bgcolor="#101010",
+        font=dict(color="#d0d0d0"),
+        annotations=[dict(
+            text=message,
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font=dict(color="#a8a8a8", size=14),
+        )],
+    )
+    return fig
+
+
+def make_semantic_space(word_colors: list[dict]) -> go.Figure:
+    """Plot unique words in PCA-projected BERT space using their output colors."""
+    unique_items = []
+    seen = set()
+    for item in word_colors:
+        word = str(item.get("word", "")).strip()
+        key = word.lower()
+        if not word or key in seen or "semantic_xyz" not in item:
+            continue
+        seen.add(key)
+        unique_items.append(item)
+
+    if not unique_items:
+        return _empty_dark_figure("텍스트를 입력하면 단어 의미 공간이 표시됩니다.")
+
+    coordinates = np.array(
+        [item["semantic_xyz"] for item in unique_items], dtype=np.float32
+    )
+    words = [str(item["word"]) for item in unique_items]
+    colors = [
+        f"rgb({int(item['rgb_out'][0])},{int(item['rgb_out'][1])},{int(item['rgb_out'][2])})"
+        for item in unique_items
+    ]
+    hover_texts = [
+        (
+            f"<b>{html.escape(str(item['word']))}</b>"
+            f"<br>RGB: {item.get('rgb_out', [])}"
+            f"<br>색 확신도: {int(round(float(item.get('confidence', 0)) * 100))}%"
+        )
+        for item in unique_items
+    ]
+
+    fig = go.Figure()
+
+    if len(unique_items) > 1:
+        distances = np.linalg.norm(
+            coordinates[:, None, :] - coordinates[None, :, :], axis=2
+        )
+        np.fill_diagonal(distances, np.inf)
+        edges = set()
+        edge_x, edge_y, edge_z = [], [], []
+        for index in range(len(unique_items)):
+            neighbor = int(np.argmin(distances[index]))
+            edge = tuple(sorted((index, neighbor)))
+            if edge in edges:
+                continue
+            edges.add(edge)
+            start, end = edge
+            edge_x.extend([coordinates[start, 0], coordinates[end, 0], None])
+            edge_y.extend([coordinates[start, 1], coordinates[end, 1], None])
+            edge_z.extend([coordinates[start, 2], coordinates[end, 2], None])
+
+        fig.add_trace(go.Scatter3d(
+            x=edge_x,
+            y=edge_y,
+            z=edge_z,
+            mode="lines",
+            line=dict(color="rgba(190,190,190,0.18)", width=2),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+
+    show_labels = len(unique_items) <= 40
+    fig.add_trace(go.Scatter3d(
+        x=coordinates[:, 0],
+        y=coordinates[:, 1],
+        z=coordinates[:, 2],
+        mode="markers+text" if show_labels else "markers",
+        text=words if show_labels else None,
+        textposition="top center",
+        textfont=dict(color="#dddddd", size=11),
+        marker=dict(
+            size=3,
+            color=colors,
+            opacity=1,
+            line=dict(width=1, color="#8a8a8a"),
+        ),
+        hovertext=hover_texts,
+        hoverinfo="text",
+        showlegend=False,
+    ))
+
+    fig.update_layout(
+        height=560,
+        margin=dict(l=0, r=0, b=0, t=8),
+        paper_bgcolor="#101010",
+        plot_bgcolor="#101010",
+        font=dict(color="#d0d0d0"),
+        scene=dict(
+            bgcolor="#101010",
+            aspectmode="cube",
+            xaxis=dict(
+                title="Semantic 1",
+                backgroundcolor="#151515",
+                gridcolor="#343434",
+                zerolinecolor="#505050",
+            ),
+            yaxis=dict(
+                title="Semantic 2",
+                backgroundcolor="#151515",
+                gridcolor="#343434",
+                zerolinecolor="#505050",
+            ),
+            zaxis=dict(
+                title="Semantic 3",
+                backgroundcolor="#151515",
+                gridcolor="#343434",
+                zerolinecolor="#505050",
+            ),
+            camera=dict(eye=dict(x=1.45, y=1.45, z=1.2)),
+        ),
+    )
+    return fig
+
+
 # ─── 3D 타워 ─────────────────────────────────────────────────────────────────
 
 def rgb_to_barycentric(r: float, g: float, b: float) -> tuple[float, float]:
