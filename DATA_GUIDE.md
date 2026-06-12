@@ -13,7 +13,7 @@
 | `bert_anchor_R/G/B.npy` | `data/` | RGB 앵커 벡터 (768차원 × 3) |
 | `nrc_word_rgb.csv` | `data/` | NRC 단어→RGB 변환 완료 (11,449쌍) |
 | `synesthesia_grapheme_mean_rgb.csv` | `data/` | Eagleman 알파벳 공감각 데이터 (26쌍) |
-| `poetry_candidate_words.txt` | `data/` | 역방향 후보 단어 집합 (9,942개) |
+| `poetry_candidate_words.txt` | `data/` | 역방향 후보 단어 집합 (9,770개) |
 
 ---
 
@@ -94,7 +94,7 @@ NRC 단어-색상 데이터 11,449쌍 + Eagleman 알파벳 데이터 26쌍으로
 **배치 경로:** `data/candidate_vectors.npy`
 
 **설명:**  
-역방향 파이프라인의 후보 단어 9,942개에 대해 BERT 벡터를 사전 계산한 캐시 파일 (shape: 9942×768).  
+역방향 파이프라인의 후보 단어 9,770개에 대해 BERT 벡터를 사전 계산한 캐시 파일 (shape: 9770×768).  
 최초 계산에 약 15~30분이 소요되므로 B가 한 번만 계산해 팀 전체에 공유합니다.  
 `run_reverse()` 호출 시 자동으로 로드되므로 **코드 수정 없이 파일만 배치하면 됩니다.**  
 파일이 없으면 `run_reverse()` 첫 실행 시 자동 계산이 시작되어 오랜 시간이 걸립니다.

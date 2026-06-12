@@ -7,7 +7,7 @@ reverse_pipeline.py — 역방향 파이프라인 (이미지 → 구조적 시)
     → 다운샘플링 (PIL, 8×8 / 16×16 / 32×32)
     → 픽셀별 RGB → Anchor 기반 역변환 → v_i (768차원)
     → (선택) α 키워드 문맥 혼합
-    → 후보 단어 집합(9,942개)과 cosine similarity → 최근접 단어
+    → 후보 단어 집합(9,770개)과 cosine similarity → 최근접 단어
     → 격자 구조 유지한 구조적 시 출력
 """
 
@@ -24,7 +24,7 @@ def load_candidate_words() -> list[str]:
     """역방향 후보 단어 집합(poetry_candidate_words.txt)을 로드한다.
 
     Returns:
-        list[str]: 9,942개 시적 단어 리스트
+        list[str]: 9,770개 시적 단어 리스트
     """
     path = DATA_DIR / "poetry_candidate_words.txt"
     return path.read_text(encoding="utf-8").splitlines()
@@ -121,7 +121,7 @@ def find_nearest_word(v_i, norm_mat, candidate_words, v_context=None, alpha=0.0,
 
     score = alpha * sim_context + (1 - alpha) * sim_color
 
-    # 상위 top_k 후보로 좁힌 뒤 softmax 샘플링 (전체 9,942개 softmax는 사실상
+    # 상위 top_k 후보로 좁힌 뒤 softmax 샘플링 (전체 9,770개 softmax는 사실상
     # 균등 랜덤이 되는 문제 때문). _run_reverse_core 도 동일 방식을 쓴다.
     return candidate_words[_sample_idx(score, temperature, top_k=40)]
 
@@ -162,7 +162,7 @@ def apply_coherence(vec_grid: np.ndarray, coherence: float) -> np.ndarray:
 def _sample_idx(score: np.ndarray, temperature: float, top_k: int = 40) -> int:
     """점수 상위 top_k 후보 중에서만 softmax 온도 샘플링으로 인덱스를 고른다.
 
-    후보가 9,942개라 전체에 softmax를 걸면(과거 방식) 점수 차가 온도에 비해
+    후보가 9,770개라 전체에 softmax를 걸면(과거 방식) 점수 차가 온도에 비해
     작아 사실상 균등 랜덤이 됐다 — 좋은 색·테마 후보가 있어도 무관한 단어가
     뽑히는 주된 원인. 상위 top_k로 좁힌 뒤 낮은 온도로 샘플링해 색 충실도와
     다양성을 모두 확보한다.
