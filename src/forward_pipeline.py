@@ -521,7 +521,7 @@ def color_source(word: str, nrc_words: frozenset, eagleman: dict) -> str:
 def recommend_vivid_words(n_per_channel: int = 6) -> dict:
     """모델이 가장 '색이 뚜렷하다'고 보는 단어를 R/G/B별로 추천한다 (캐시).
 
-    candidate_vectors.npy 캐시가 있으면 시 코퍼스 9,942개에서 각 앵커 방향으로
+    candidate_vectors.npy 캐시가 있으면 시 코퍼스 9,770개에서 각 앵커 방향으로
     가장 distinctive(지배 채널 마진이 큰) 단어를 고른다. 캐시가 없으면(팀원 환경)
     검증된 큐레이션 폴백을 반환한다.
     """

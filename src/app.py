@@ -792,5 +792,8 @@ def build_ui():
 
 if __name__ == "__main__":
     demo = build_ui()
-    # share=True를 주면 외부 링크가 생성되어 교수님/팀원 시연에 편리합니다.
-    demo.launch(share=True, theme=APP_THEME, css=APP_CSS)
+    # Hugging Face Spaces(SPACE_ID 환경변수 존재) 에서는 플랫폼이 0.0.0.0:7860 으로
+    # 자동 바인딩하고 영구 공개 URL을 제공하므로 임시 share 링크가 필요 없다.
+    # 로컬 실행 시에는 share=True 로 임시 외부 링크를 만들어 시연을 편하게 한다.
+    on_spaces = os.environ.get("SPACE_ID") is not None
+    demo.launch(share=not on_spaces, theme=APP_THEME, css=APP_CSS)
